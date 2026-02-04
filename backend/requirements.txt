@@ -1,0 +1,15 @@
+flask
+flask-cors
+sqlalchemy
+python-dotenv
+gunicorn
+sqlalchemy
+psycopg2-binary
+alembic
+faiss-cpu
+torch
+transformers
+sentence-transformers
+numpy
+pandas
+jupyterlab
