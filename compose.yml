@@ -1,8 +1,15 @@
 services:
-  backend:
-    build: backend/
+  apache:
+    build: ./apache
     ports: 
-      - '5001:5001'
+      - "80:80"
+    depends_on: 
+      - backend
+
+  backend:
+    build: ./backend/
+    expose:
+      - "5001"
     volumes:
       - ./backend:/backend
     env_file:
