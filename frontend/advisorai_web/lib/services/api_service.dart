@@ -22,7 +22,8 @@ class ApiService {
   /// Constructor with configurable base URL
   /// changed to localhost to accomodate containers
   ApiService({
-    this.baseUrl = 'http://localhost:5001',
+    // remove base url to accomodate apache
+    this.baseUrl = '',
     this.timeoutSeconds = 10,
   });
 
@@ -135,6 +136,20 @@ class ApiService {
   /// Returns student data by ID
   Future<Map<String, dynamic>> getStudent(int studentId) async {
     return await get('/api/students');
+  }
+
+  /// GET /api/students/search?q= - Search students for suggestions
+  Future<List<Map<String, dynamic>>> searchStudents(String query) async {
+    final data = await get('/api/students/search?q=${Uri.encodeComponent(query)}');
+    if (data is List) {
+      return data.cast<Map<String, dynamic>>();
+    }
+    throw Exception('Unexpected response type for search');
+  }
+
+  /// GET /api/students/{student_id} - Fetch student detail
+  Future<Map<String, dynamic>> getStudentDetail(String studentId) async {
+    return await get('/api/students/$studentId');
   }
 
   /// POST /api/chat - Send chat message to AdvisorAI

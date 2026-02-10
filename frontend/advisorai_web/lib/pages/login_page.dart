@@ -147,6 +147,12 @@ class _LoginPageState extends State<LoginPage> {
                       },
                       child: const Text('Test API Connection'),
                     ),
+
+                    TextButton(
+                        onPressed: () {
+                          Navigator.pushNamed(context, '/student-search');
+                        },
+                        child: const Text('Student Search'))
                   ],
                 ),
               ),
