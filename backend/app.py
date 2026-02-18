@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
 import os
+from sqlalchemy import or_
 from database import session, Base
 from models import Student, Course, StudentCourse, AdvisingSession
 
@@ -21,25 +22,78 @@ def students():
         students = session.query(Student).all()
         student_list = [{
             "id": s.id,
+            "student_id": s.student_id,
             "name": s.name,
-            "email": s.email
+            "program": s.program,
+            "bulletin_year": s.bulletin_year,
+            "email": s.email,
+            "phone": s.phone,
             } 
             for s in students]
         return jsonify(student_list)
     if request.method == "POST":
-        data = request.json
+        data = request.json or {}
         try:
-            new_student = Student(id=data["id"],name=data["name"], email=data["email"])
+            new_student = Student(
+                student_id=data["student_id"],
+                name=data["name"],
+                program=data["program"],
+                bulletin_year=data["bulletin_year"],
+                email=data["email"],
+                phone=data["phone"],
+            )
             session.add(new_student)
             session.commit()
-            #add more confirmation
-            return jsonify({"id": new_student.id,
-                            "name": new_student.name,
-                            "email": new_student.email
-                            }), 201
+            return jsonify({
+                "id": new_student.id,
+                "student_id": new_student.student_id,
+                "name": new_student.name,
+                "program": new_student.program,
+                "bulletin_year": new_student.bulletin_year,
+                "email": new_student.email,
+                "phone": new_student.phone,
+            }), 201
         except Exception as e:
             session.rollback()
             return jsonify({"error": str(e)}), 400
+
+@app.route("/api/students/search", methods=["GET"])
+def students_search():
+    query = (request.args.get("q") or "").strip()
+    if not query:
+        return jsonify([])
+
+    pattern = f"%{query}%"
+    students = (
+        session.query(Student)
+        .filter(
+            or_(
+                Student.name.ilike(pattern),
+                Student.student_id.ilike(pattern),
+                Student.program.ilike(pattern),
+            )
+        )
+        .limit(10)
+        .all()
+    )
+
+    results = [{"student_id": s.student_id, "name": s.name} for s in students]
+    return jsonify(results)
+
+@app.route("/api/students/<student_id>", methods=["GET"])
+def student_detail(student_id):
+    student = session.query(Student).filter(Student.student_id == student_id).first()
+    if not student:
+        return jsonify({"error": "Student not found"}), 404
+
+    return jsonify({
+        "student_id": student.student_id,
+        "name": student.name,
+        "program": student.program,
+        "bulletin_year": student.bulletin_year,
+        "email": student.email,
+        "phone": student.phone,
+    })
         
 @app.route("/api/courses", methods=["GET", "POST"])
 def courses():
@@ -124,11 +178,7 @@ def student_courses():
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5001))
-
-    print("Creating database tables...")
-    Base.metadata.create_all(bind=session.get_bind())
-    print("Database tables created.")   
+    port = int(os.getenv("PORT", 5001)) 
 
     #hosted on 0.0.0.0 because flask server needs to be accessible from outside the container when deployed with Docker
     app.run(host="0.0.0.0",port=port, debug=False)

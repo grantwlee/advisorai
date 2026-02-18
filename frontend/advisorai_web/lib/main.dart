@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'pages/login_page.dart';
 import 'pages/dashboard_page.dart';
 import 'pages/api_test_page.dart';
+import 'pages/student_search_page.dart';
 
 void main() {
   runApp(const AdvisorAIApp());
@@ -45,6 +46,7 @@ class AdvisorAIApp extends StatelessWidget {
         '/': (context) => LoginPage(),
         '/dashboard': (context) => DashboardPage(),
         '/api-test': (context) => ApiTestPage(),
+        '/student-search': (context) => StudentSearchPage(),
       },
     );
   }
