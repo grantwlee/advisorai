@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16
+    container_name: bulletin-db
+    environment:
+      POSTGRES_DB: bulletins
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - bulletin_data:/var/lib/postgresql/data
+    
+  adminer:
+    image: adminer
+    ports:
+      - 8081:8080
+
+volumes:
+  bulletin_data:
