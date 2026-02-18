@@ -1,0 +1,16 @@
+{
+	"bulletins": [
+		{
+			"bulletin_id": "au_2024_2025_pdf",
+			"type": "pdf",
+			"path": "data/bulletins/pdf/Bulletin+24-25+PDF.pdf",
+			"bulletin_year": "2024-2025"
+		},
+		{
+			"bulletin_id": "au_2023_2024_pdf",
+			"type": "pdf",
+			"path": "data/bulletins/pdf/Bulletin_23-24_PDF_FINAL.pdf",
+			"bulletin_year": "2023-2024"
+		}
+	]
+}
