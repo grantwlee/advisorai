@@ -1,0 +1,36 @@
+services:
+  apache:
+    build: ./apache
+    ports: 
+      - "80:80"
+    depends_on: 
+      - backend
+
+  backend:
+    build: ./backend/
+    expose:
+      - "5001"
+    volumes:
+      - ./backend:/backend
+    env_file:
+      - .env
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: advisorai_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  
+  adminer:
+    image: adminer
+    ports:
+      - 8080:8080
+
+volumes:
+  postgres_data:

@@ -8,4 +8,6 @@ __pycache__/
 
 .env
 
-apache/web/
+/apache/web
+
+

@@ -130,4 +130,5 @@ if __name__ == "__main__":
     Base.metadata.create_all(bind=session.get_bind())
     print("Database tables created.")   
 
-    app.run(port=port, debug=True)
+    #hosted on 0.0.0.0 because flask server needs to be accessible from outside the container when deployed with Docker
+    app.run(host="0.0.0.0",port=port, debug=False)

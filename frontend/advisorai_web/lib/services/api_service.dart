@@ -20,8 +20,9 @@ class ApiService {
   final int timeoutSeconds;
 
   /// Constructor with configurable base URL
+  /// changed to localhost to accomodate containers
   ApiService({
-    this.baseUrl = 'http://127.0.0.1:5001',
+    this.baseUrl = 'http://localhost:5001',
     this.timeoutSeconds = 10,
   });
 
