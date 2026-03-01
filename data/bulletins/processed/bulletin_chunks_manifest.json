@@ -1,0 +1,33 @@
+{
+  "sourceDir": "data/bulletins/raw",
+  "outDir": "data/bulletins/processed",
+  "model": "sentence-transformers/all-MiniLM-L6-v2",
+  "headerCutPct": 0.08,
+  "footerCutPct": 0.08,
+  "targetChars": 1300,
+  "overlapChars": 200,
+  "minChunkChars": 250,
+  "bulletins": [
+    {
+      "bulletin": "22-23",
+      "sourcePdf": "Bulletin+22-23+PDF-final.pdf",
+      "pages": 665,
+      "chunks": 3955
+    },
+    {
+      "bulletin": "24-25",
+      "sourcePdf": "Bulletin+24-25+PDF.pdf",
+      "pages": 668,
+      "chunks": 3935
+    },
+    {
+      "bulletin": "23-24",
+      "sourcePdf": "Bulletin_23-24_PDF_FINAL.pdf",
+      "pages": 678,
+      "chunks": 4044
+    }
+  ],
+  "totalChunks": 11934,
+  "faissDim": 384,
+  "faissIndexType": "IndexFlatIP (normalized embeddings)"
+}

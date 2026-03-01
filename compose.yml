@@ -12,6 +12,9 @@ services:
       - "5001"
     volumes:
       - ./backend:/backend
+      - ./data/bulletins/processed:/data/bulletins/processed:ro
+    environment:
+      RETRIEVAL_DATA_DIR: /data/bulletins/processed
     env_file:
       - .env
     depends_on:
