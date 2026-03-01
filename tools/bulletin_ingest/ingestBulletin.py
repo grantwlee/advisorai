@@ -28,9 +28,9 @@ HEADER_CUT = 0.08   # top 8% of page height
 FOOTER_CUT = 0.08   # bottom 8% of page height
 
 # Chunking
-TARGET_CHARS = 1300
-OVERLAP_CHARS = 200
-MIN_CHUNK_CHARS = 250
+TARGET_WORDS = 500
+MAX_WORDS = 800
+MIN_WORDS = 80
 
 # Embeddings
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
@@ -133,41 +133,60 @@ def make_chunks(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not doc_text:
         return []
 
-    # Simple char-based chunking with overlap, then clean boundaries a bit
+    # Sentence-aware, word-count-based chunking
+    sentence_pattern = re.compile(r"[^.!?\n]+(?:[.!?]+|$)")
+    sentence_matches = list(sentence_pattern.finditer(doc_text))
+
     chunks = []
-    i = 0
-    n = len(doc_text)
+    current_sentences: List[str] = []
+    current_pages: set[int] = set()
+    current_word_count = 0
 
-    while i < n:
-        j = min(i + TARGET_CHARS, n)
-        # try to end on paragraph boundary
-        cut = doc_text.rfind("\n\n", i, j)
-        if cut != -1 and cut > i + MIN_CHUNK_CHARS:
-            j = cut
+    def flush_current():
+        nonlocal current_sentences, current_pages, current_word_count
+        if current_word_count < MIN_WORDS:
+            return
+        chunk_text = normalize_whitespace(" ".join(current_sentences))
+        if not chunk_text:
+            return
+        chunks.append({
+            "chunk": chunk_text,
+            "pageOccurrence": sorted(current_pages),
+            "charCount": len(chunk_text),
+        })
+        current_sentences = []
+        current_pages = set()
+        current_word_count = 0
 
-        chunk = doc_text[i:j].strip()
-        if len(chunk) >= MIN_CHUNK_CHARS:
-            # determine page occurrences
-            chunk_start, chunk_end = i, j
-            occ = []
-            for (s, e, pg) in spans:
-                # overlap test
-                if chunk_end <= s or chunk_start >= e:
-                    continue
-                occ.append(pg)
-            occ = sorted(list(set(occ)))
+    for m in sentence_matches:
+        sentence = m.group(0).strip()
+        if not sentence:
+            continue
 
-            chunks.append({
-                "chunk": chunk,
-                "pageOccurrence": occ,
-                "charCount": len(chunk),
-            })
+        sentence_words = sentence.split()
+        sentence_word_count = len(sentence_words)
+        s_start, s_end = m.span()
 
-        if j >= n:
-            break
+        sentence_pages = set()
+        for start, end, pg in spans:
+            if s_end <= start or s_start >= end:
+                continue
+            sentence_pages.add(pg)
 
-        # overlap
-        i = max(0, j - OVERLAP_CHARS)
+        # If adding this sentence would exceed max, flush first.
+        if current_sentences and (current_word_count + sentence_word_count > MAX_WORDS):
+            flush_current()
+
+        current_sentences.append(sentence)
+        current_pages.update(sentence_pages)
+        current_word_count += sentence_word_count
+
+        # Flush once target is reached to keep chunk sizes around ~500 words.
+        if current_word_count >= TARGET_WORDS:
+            flush_current()
+
+    # Flush tail
+    flush_current()
 
     return chunks
 
@@ -198,9 +217,9 @@ def ingest_bulletins():
         "model": MODEL_NAME,
         "headerCutPct": HEADER_CUT,
         "footerCutPct": FOOTER_CUT,
-        "targetChars": TARGET_CHARS,
-        "overlapChars": OVERLAP_CHARS,
-        "minChunkChars": MIN_CHUNK_CHARS,
+        "targetWords": TARGET_WORDS,
+        "maxWords": MAX_WORDS,
+        "minWords": MIN_WORDS,
         "bulletins": []
     }
 
