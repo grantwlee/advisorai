@@ -1,5 +1,4 @@
 from flask import Flask, jsonify, request
-from flask_cors import CORS
 from dotenv import load_dotenv
 import os
 from sqlalchemy import or_
@@ -16,7 +15,6 @@ load_dotenv()
 FLASK_ENV = os.getenv("FLASK_ENV", "development")
 
 app = Flask(__name__)
-CORS(app)
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_PROCESSED_DIR = "data/bulletins/processed"
