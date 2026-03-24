@@ -1,4 +1,5 @@
 import os
+import traceback
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
@@ -356,9 +357,23 @@ def query():
             top_k=top_k,
         )
         return jsonify(response)
+    except SQLAlchemyError as exc:
+        session.rollback()
+        return jsonify(
+            {
+                "error": "Query retrieval failed. Ensure bulletin_chunks are loaded and the retrieval index is available.",
+                "detail": str(exc),
+            }
+        ), 500
     except Exception as exc:
         session.rollback()
-        return jsonify({"error": str(exc)}), 500
+        traceback.print_exc()
+        return jsonify(
+            {
+                "error": str(exc),
+                "type": exc.__class__.__name__,
+            }
+        ), 500
 
 
 if __name__ == "__main__":

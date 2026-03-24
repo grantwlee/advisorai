@@ -1,12 +1,15 @@
 import unittest
 import sys
+from unittest.mock import patch
 from pathlib import Path
+import socket
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.degree_audit import summarize_degree_audit
 from services.planning_service import build_planning_context, is_planning_question
 from services.query_service import QueryService
+from services.llm_client import LLMError, OllamaClient
 from services.verification import extract_citation_ids, verify_answer
 
 
@@ -131,33 +134,42 @@ class QueryServiceTests(unittest.TestCase):
         verified = verify_answer(repaired, retrieved)
         self.assertTrue(verified["passed"])
 
-    def test_planning_fallback_answer_returns_cited_sentence(self):
+    def test_build_prompt_truncates_chunk_payload(self):
         service = object.__new__(QueryService)
-        planning_context = {
-            "program": "Computer Science",
-            "recommended_next_courses": [
-                {"code": "CPTR 425"},
-                {"code": "CPTR 430"},
-                {"code": "CPTR 437"},
-            ],
-        }
         retrieved = [
             {
-                "chunkId": "23-24:007646",
+                "chunkId": "23-24:007677",
                 "bulletin": "23-24",
-                "chunk": (
-                    "Computer Science BS CPTR 425 Programming Languages "
-                    "CPTR 430 Analysis of Algorithms CPTR 437 Formal Theory of Computation"
-                ),
-                "score": 3.0,
+                "pageOccurrence": [487],
+                "chunk": "A" * 4000,
             }
         ]
 
-        answer = service._build_planning_fallback_answer(planning_context, retrieved)
+        prompt = service._build_prompt(
+            question="What does INFS 428 cover?",
+            student=None,
+            audit_summary=None,
+            planning_context=None,
+            retrieved_chunks=retrieved,
+            rewrite_feedback=None,
+            prior_answer=None,
+        )
 
-        self.assertIsNotNone(answer)
-        self.assertIn("[23-24:007646]", answer)
-        self.assertTrue(verify_answer(answer, retrieved)["passed"])
+        self.assertIn('"chunkId": "23-24:007677"', prompt)
+        self.assertIn("...", prompt)
+        self.assertLess(len(prompt), 3500)
+
+
+class LLMClientTests(unittest.TestCase):
+    @patch("urllib.request.urlopen", side_effect=socket.timeout("timed out"))
+    def test_generate_json_wraps_socket_timeout_as_llm_error(self, _mock_urlopen):
+        client = OllamaClient()
+
+        with self.assertRaises(LLMError):
+            client.generate_json(
+                system_prompt="Return JSON",
+                prompt="Hello",
+            )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from database import engine
 from services.year_utils import normalize_bulletin_year
@@ -220,12 +221,15 @@ class RetrievalService:
             bulletin_year=bulletin_year,
             program=program,
         )
-        keyword_top = self.keyword_search(
-            query,
-            k=max(k, 10),
-            bulletin_year=bulletin_year,
-            program=program,
-        )
+        try:
+            keyword_top = self.keyword_search(
+                query,
+                k=max(k, 10),
+                bulletin_year=bulletin_year,
+                program=program,
+            )
+        except SQLAlchemyError:
+            keyword_top = []
 
         merged: dict[str, dict] = {}
         for row in semantic_top:

@@ -18,6 +18,8 @@ DEFAULT_REFUSAL = (
     "I can only answer from the retrieved bulletin evidence, and the current "
     "evidence is not sufficient to answer this safely."
 )
+PROMPT_CHUNK_CHAR_LIMIT = int(os.getenv("LLM_PROMPT_CHUNK_CHAR_LIMIT", "600"))
+PROMPT_TOTAL_CHARS = int(os.getenv("LLM_PROMPT_TOTAL_CHARS", "2400"))
 LOG_PATH = Path(
     os.getenv(
         "QUERY_LOG_PATH",
@@ -59,8 +61,6 @@ def serialize_retrieved_chunks(chunks: list[dict]) -> list[dict]:
         }
         for chunk in chunks
     ]
-
-
 class QueryService:
     def __init__(self) -> None:
         self.retrieval = get_retrieval_service()
@@ -125,36 +125,6 @@ class QueryService:
             self._log_event(response, question=question, student=student)
             return response
 
-        if planning_question and planning_context:
-            quick_answer = self._build_planning_fallback_answer(
-                planning_context,
-                retrieved_chunks,
-            )
-            if quick_answer:
-                quick_verifier = verify_answer(quick_answer, retrieved_chunks)
-                if quick_verifier["passed"]:
-                    timings_ms["generation"] = 0
-                    timings_ms["verification"] = max(
-                        0,
-                        round((time.perf_counter() - started_at) * 1000)
-                        - timings_ms["retrieval"],
-                    )
-                    timings_ms["total"] = round((time.perf_counter() - started_at) * 1000)
-                    response = {
-                        "status": "answered",
-                        "answer": quick_answer,
-                        "refusal_reason": None,
-                        "citations": build_citation_payload(quick_answer, retrieved_chunks),
-                        "retrieved_chunks": serialize_retrieved_chunks(retrieved_chunks),
-                        "verifier": quick_verifier,
-                        "timings_ms": timings_ms,
-                        "student_context": self._student_context(student),
-                        "audit_summary": self._serialize_audit_summary(audit_summary),
-                        "planning_context": self._serialize_planning_context(planning_context),
-                    }
-                    self._log_event(response, question=question, student=student)
-                    return response
-
         generation_started = time.perf_counter()
         try:
             llm_result = self._generate_answer(
@@ -181,15 +151,30 @@ class QueryService:
         timings_ms["generation"] = round((time.perf_counter() - generation_started) * 1000)
 
         verification_started = time.perf_counter()
-        verified = self._verify_or_rewrite(
-            question=question,
-            initial_result=llm_result,
-            retrieved_chunks=retrieved_chunks,
-            student=student,
-            audit_summary=audit_summary,
-            planning_context=planning_context,
-            planning_question=planning_question,
-        )
+        try:
+            verified = self._verify_or_rewrite(
+                question=question,
+                initial_result=llm_result,
+                retrieved_chunks=retrieved_chunks,
+                student=student,
+                audit_summary=audit_summary,
+                planning_context=planning_context,
+            )
+        except LLMError as exc:
+            timings_ms["verification"] = round((time.perf_counter() - verification_started) * 1000)
+            timings_ms["total"] = round((time.perf_counter() - started_at) * 1000)
+            response = self._refusal_response(
+                question=question,
+                student=student,
+                retrieved_chunks=retrieved_chunks,
+                refusal_reason=str(exc),
+                verifier={"passed": False, "issues": [str(exc)]},
+                timings_ms=timings_ms,
+                planning_context=planning_context,
+            )
+            self._log_event(response, question=question, student=student)
+            return response
+
         timings_ms["verification"] = round((time.perf_counter() - verification_started) * 1000)
         timings_ms["total"] = round((time.perf_counter() - started_at) * 1000)
 
@@ -288,22 +273,7 @@ class QueryService:
         student: dict | None,
         audit_summary: dict | None,
         planning_context: dict | None,
-        planning_question: bool,
     ) -> dict:
-        if planning_question and planning_context and initial_result["status"] != "answered":
-            fallback_answer = self._build_planning_fallback_answer(
-                planning_context,
-                retrieved_chunks,
-            )
-            if fallback_answer:
-                fallback_verifier = verify_answer(fallback_answer, retrieved_chunks)
-                if fallback_verifier["passed"]:
-                    return {
-                        "status": "answered",
-                        "answer": fallback_answer,
-                        "verifier": fallback_verifier,
-                    }
-
         if initial_result["status"] != "answered":
             return {
                 "status": "refused",
@@ -355,20 +325,6 @@ class QueryService:
                 "answer": rewrite["answer"],
                 "verifier": rewritten_verifier,
             }
-
-        if planning_question and planning_context:
-            fallback_answer = self._build_planning_fallback_answer(
-                planning_context,
-                retrieved_chunks,
-            )
-            if fallback_answer:
-                fallback_verifier = verify_answer(fallback_answer, retrieved_chunks)
-                if fallback_verifier["passed"]:
-                    return {
-                        "status": "answered",
-                        "answer": fallback_answer,
-                        "verifier": fallback_verifier,
-                    }
 
         return {
             "status": "refused",
@@ -432,61 +388,64 @@ class QueryService:
         best_overlap = scored[0][0]
         return [chunk_id for overlap, _, chunk_id in scored if overlap == best_overlap][:2]
 
-    def _build_planning_fallback_answer(
-        self,
-        planning_context: dict,
-        retrieved_chunks: list[dict],
-    ) -> str | None:
-        recommended = planning_context.get("recommended_next_courses", [])
-        if not recommended:
+    def _compact_planning_context(self, planning_context: dict | None) -> dict | None:
+        if not planning_context:
             return None
 
-        course_codes = [row["code"] for row in recommended[:3]]
-        chunk_ids: list[str] = []
-        for code in course_codes:
-            match = self._best_chunk_for_course(code, retrieved_chunks)
-            if match and match not in chunk_ids:
-                chunk_ids.append(match)
+        def compact_courses(rows: list[dict], limit: int) -> list[dict]:
+            return [
+                {
+                    "code": row.get("code"),
+                    "title": row.get("title"),
+                    "credits": row.get("credits"),
+                }
+                for row in rows[:limit]
+            ]
 
-        general_chunk = self._best_chunk_for_course(planning_context.get("program", ""), retrieved_chunks)
-        if general_chunk and general_chunk not in chunk_ids:
-            chunk_ids.insert(0, general_chunk)
+        return {
+            "program": planning_context["program"],
+            "bulletin_year": planning_context["bulletin_year"],
+            "completed_course_codes": planning_context.get("completed_course_codes", [])[:12],
+            "in_progress_course_codes": planning_context.get("in_progress_course_codes", [])[:8],
+            "planned_course_codes": planning_context.get("planned_course_codes", [])[:8],
+            "remaining_requirement_count": planning_context.get("remaining_requirement_count"),
+            "remaining_credits": planning_context.get("remaining_credits"),
+            "recommended_next_courses": compact_courses(
+                planning_context.get("recommended_next_courses", []),
+                4,
+            ),
+            "blocked_courses": compact_courses(
+                planning_context.get("blocked_courses", []),
+                3,
+            ),
+        }
 
-        if not chunk_ids:
-            return None
-
-        citations = ", ".join(chunk_ids[:3])
-        program = planning_context.get("program") or "the program"
-        if len(course_codes) == 1:
-            course_text = course_codes[0]
-        elif len(course_codes) == 2:
-            course_text = f"{course_codes[0]} and {course_codes[1]}"
-        else:
-            course_text = f"{', '.join(course_codes[:-1])}, and {course_codes[-1]}"
-
-        return (
-            f"The next {program} requirements to prioritize for next-term planning are "
-            f"{course_text} [{citations}]."
-        )
-
-    def _best_chunk_for_course(self, query_text: str | None, retrieved_chunks: list[dict]) -> str | None:
-        if not query_text:
-            return None
-
-        normalized = query_text.lower()
-        matches = []
+    def _prompt_ready_chunks(self, retrieved_chunks: list[dict]) -> list[dict]:
+        budget_remaining = PROMPT_TOTAL_CHARS
+        prompt_chunks: list[dict] = []
         for chunk in retrieved_chunks:
-            chunk_text = chunk.get("chunk", "").lower()
-            overlap = sum(1 for token in re.findall(r"[a-z0-9]+", normalized) if token in chunk_text)
-            if overlap <= 0:
+            if budget_remaining <= 0:
+                break
+
+            chunk_text = re.sub(r"\s+", " ", chunk.get("chunk", "")).strip()
+            truncated = chunk_text[: min(PROMPT_CHUNK_CHAR_LIMIT, budget_remaining)].strip()
+            if not truncated:
                 continue
-            matches.append((overlap, float(chunk.get("score") or 0.0), chunk["chunkId"]))
 
-        if not matches:
-            return None
+            if len(chunk_text) > len(truncated):
+                truncated = truncated.rstrip() + " ..."
 
-        matches.sort(reverse=True)
-        return matches[0][2]
+            prompt_chunks.append(
+                {
+                    "chunkId": chunk["chunkId"],
+                    "bulletin": expand_bulletin_year(chunk["bulletin"]) or chunk["bulletin"],
+                    "pageOccurrence": chunk.get("pageOccurrence") or [],
+                    "text": truncated,
+                }
+            )
+            budget_remaining -= len(truncated)
+
+        return prompt_chunks
 
     def _build_prompt(
         self,
@@ -520,7 +479,7 @@ class QueryService:
         if planning_context:
             lines.append("Structured planning context:")
             lines.append(
-                json.dumps(self._serialize_planning_context(planning_context), indent=2)
+                json.dumps(self._compact_planning_context(planning_context), indent=2)
             )
             lines.append(
                 "For planning questions, use the structured planning context as the source of truth "
@@ -536,18 +495,8 @@ class QueryService:
                 lines.append(f"- {issue}")
 
         lines.append("Retrieved chunks:")
-        for chunk in retrieved_chunks:
-            lines.append(
-                json.dumps(
-                    {
-                        "chunkId": chunk["chunkId"],
-                        "bulletin": expand_bulletin_year(chunk["bulletin"]) or chunk["bulletin"],
-                        "pageOccurrence": chunk.get("pageOccurrence") or [],
-                        "text": chunk["chunk"],
-                    },
-                    ensure_ascii=True,
-                )
-            )
+        for chunk in self._prompt_ready_chunks(retrieved_chunks):
+            lines.append(json.dumps(chunk, ensure_ascii=True))
 
         lines.append(
             "If the chunks are insufficient, return "

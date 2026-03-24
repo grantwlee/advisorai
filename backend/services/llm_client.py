@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import urllib.error
 import urllib.request
 
@@ -21,6 +22,10 @@ class OllamaClient:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 return json.loads(response.read().decode("utf-8"))
+        except (TimeoutError, socket.timeout) as exc:
+            raise LLMError(
+                f"Timed out reaching LLM service at {self.base_url} after {self.timeout_seconds} seconds."
+            ) from exc
         except urllib.error.URLError as exc:
             raise LLMError(f"Unable to reach LLM service at {self.base_url}: {exc}") from exc
 
@@ -57,6 +62,10 @@ class OllamaClient:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
             raise LLMError(f"LLM request failed with HTTP {exc.code}: {detail}") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise LLMError(
+                f"LLM generation timed out after {self.timeout_seconds} seconds for model {self.model}."
+            ) from exc
         except urllib.error.URLError as exc:
             raise LLMError(f"Unable to reach LLM service at {self.base_url}: {exc}") from exc
 

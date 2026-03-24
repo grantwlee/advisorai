@@ -1,0 +1,109 @@
+{
+  "base_url": "http://localhost/api",
+  "passed": 7,
+  "total": 10,
+  "accuracy": 0.7,
+  "average_latency_ms": 2784.8,
+  "results": [
+    {
+      "id": "direct-cs-core",
+      "passed": false,
+      "status_ok": false,
+      "citations_ok": false,
+      "year_ok": true,
+      "latency_ms": 5944,
+      "response_status": "refused",
+      "error": null
+    },
+    {
+      "id": "direct-is-major",
+      "passed": true,
+      "status_ok": true,
+      "citations_ok": true,
+      "year_ok": true,
+      "latency_ms": 1809,
+      "response_status": "answered",
+      "error": null
+    },
+    {
+      "id": "missing-data-refusal",
+      "passed": true,
+      "status_ok": true,
+      "citations_ok": true,
+      "year_ok": true,
+      "latency_ms": 900,
+      "response_status": "refused",
+      "error": null
+    },
+    {
+      "id": "conflicting-bulletin-years",
+      "passed": false,
+      "status_ok": false,
+      "citations_ok": false,
+      "year_ok": false,
+      "latency_ms": 4561,
+      "response_status": "refused",
+      "error": null
+    },
+    {
+      "id": "student-cs-audit",
+      "passed": true,
+      "status_ok": true,
+      "citations_ok": true,
+      "year_ok": true,
+      "latency_ms": 207,
+      "response_status": "answered",
+      "error": null
+    },
+    {
+      "id": "student-is-audit",
+      "passed": true,
+      "status_ok": true,
+      "citations_ok": true,
+      "year_ok": true,
+      "latency_ms": 174,
+      "response_status": "answered",
+      "error": null
+    },
+    {
+      "id": "student-cs-bulletin-filter",
+      "passed": true,
+      "status_ok": true,
+      "citations_ok": true,
+      "year_ok": true,
+      "latency_ms": 42,
+      "response_status": "answered",
+      "error": null
+    },
+    {
+      "id": "direct-database-course",
+      "passed": true,
+      "status_ok": true,
+      "citations_ok": true,
+      "year_ok": true,
+      "latency_ms": 2367,
+      "response_status": "answered",
+      "error": null
+    },
+    {
+      "id": "hallucination-guard",
+      "passed": true,
+      "status_ok": true,
+      "citations_ok": true,
+      "year_ok": true,
+      "latency_ms": 4624,
+      "response_status": "refused",
+      "error": null
+    },
+    {
+      "id": "year-qualified-conflict",
+      "passed": false,
+      "status_ok": false,
+      "citations_ok": false,
+      "year_ok": false,
+      "latency_ms": 7220,
+      "response_status": "refused",
+      "error": null
+    }
+  ]
+}

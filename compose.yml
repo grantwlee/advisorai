@@ -10,6 +10,10 @@ services:
 
   backend:
     build: ./backend/
+    command:
+      - /bin/sh
+      - -c
+      - python wait_for_llm.py && gunicorn app:app --bind 0.0.0.0:5001 --workers 1 --timeout 180 --graceful-timeout 30
     expose:
       - "5001"
     volumes:
@@ -22,6 +26,10 @@ services:
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-180}
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-180}
       LLM_CONTEXT_WINDOW: ${LLM_CONTEXT_WINDOW:-4096}
+      LLM_PROMPT_CHUNK_CHAR_LIMIT: ${LLM_PROMPT_CHUNK_CHAR_LIMIT:-600}
+      LLM_PROMPT_TOTAL_CHARS: ${LLM_PROMPT_TOTAL_CHARS:-2400}
+      LLM_STARTUP_TIMEOUT_SECONDS: ${LLM_STARTUP_TIMEOUT_SECONDS:-600}
+      LLM_STARTUP_POLL_SECONDS: ${LLM_STARTUP_POLL_SECONDS:-5}
       QUERY_LOG_PATH: ${QUERY_LOG_PATH:-/backend/logs/query_logs.jsonl}
     env_file:
       - .env
@@ -47,10 +55,19 @@ services:
   llm:
     image: ollama/ollama:latest
     restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - /workspace/backend/start_ollama.sh
     ports:
       - "11434:11434"
     volumes:
+      - .:/workspace
       - ollama_data:/root/.ollama
+    environment:
+      LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    gpus: ${OLLAMA_GPU_REQUEST:-all}
 
 volumes:
   postgres_data:
