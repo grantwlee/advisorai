@@ -3,6 +3,8 @@ services:
     build: ./apache
     ports: 
       - "80:80"
+    volumes:
+      - ./frontend/advisorai_web/build/web:/usr/local/apache2/htdocs:ro
     depends_on: 
       - backend
 
