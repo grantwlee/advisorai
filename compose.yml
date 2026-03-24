@@ -1,7 +1,7 @@
 services:
   apache:
     build: ./apache
-    ports: 
+    ports:
       - "80:80"
     volumes:
       - ./frontend/advisorai_web/build/web:/usr/local/apache2/htdocs:ro
@@ -14,10 +14,20 @@ services:
       - "5001"
     volumes:
       - ./backend:/backend
+      - ./data/bulletins/processed:/data/bulletins/processed:ro
+    environment:
+      RETRIEVAL_DATA_DIR: /data/bulletins/processed
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://llm:11434}
+      LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-180}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-180}
+      LLM_CONTEXT_WINDOW: ${LLM_CONTEXT_WINDOW:-4096}
+      QUERY_LOG_PATH: ${QUERY_LOG_PATH:-/backend/logs/query_logs.jsonl}
     env_file:
       - .env
     depends_on:
       - db
+      - llm
 
   db:
     image: postgres:16
@@ -34,5 +44,14 @@ services:
     ports:
       - 8080:8080
 
+  llm:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
 volumes:
   postgres_data:
+  ollama_data:

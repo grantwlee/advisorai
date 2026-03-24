@@ -1,114 +1,80 @@
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 
-/// API Service Class
-/// Handles all HTTP communication with the Flask REST API
-///
-/// Key Concepts Demonstrated:
-/// - HTTP client usage
-/// - Async/await for asynchronous operations
-/// - JSON encoding/decoding
-/// - Error handling
-/// - Service layer pattern (separation of concerns)
 class ApiService {
-  // Base URL for the Flask API
-  // NOTE: Update this to match your Flask server location
-  // For local development: 'http://localhost:5000'
-  // For DGX deployment: 'http://your-dgx-ip:5000'
   final String baseUrl;
-
   final int timeoutSeconds;
 
-  /// Constructor with configurable base URL
-  /// changed to localhost to accomodate containers
   ApiService({
-    // remove base url to accomodate apache
     this.baseUrl = '',
-    this.timeoutSeconds = 10,
+    this.timeoutSeconds = 240,
   });
 
-  /// Helper method to construct full URLs
   String _buildUrl(String endpoint) {
-    // Remove leading slash if present to avoid double slashes
     final cleanEndpoint =
         endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
     return '$baseUrl/$cleanEndpoint';
   }
 
-  /// Generic GET request handler
-  ///
-  /// Makes an HTTP GET request to the specified endpoint
-  /// Returns parsed JSON as Map<String, dynamic>
-  /// Throws exception on error
-  ///
-  /// Changed Map<String, dynamic> to dynamic to handle list cases
   Future<dynamic> get(String endpoint) async {
     final url = Uri.parse(_buildUrl(endpoint));
-
     try {
-      print('Making GET request to: $url');
-
-      // Make HTTP GET request with timeout
       final response = await http.get(url).timeout(
         Duration(seconds: timeoutSeconds),
-        onTimeout: () {
-          throw Exception('Request timeout after $timeoutSeconds seconds');
-        },
+        onTimeout: () =>
+            throw Exception('Request timeout after $timeoutSeconds seconds'),
       );
 
-      print('Response status: ${response.statusCode}');
-      print('Response body: ${response.body}');
-
-      // Check HTTP status code
       if (response.statusCode == 200) {
-        // Parse JSON response
         return jsonDecode(response.body);
-      } else {
-        // Handle error responses
-        throw Exception(
-          'HTTP ${response.statusCode}: ${response.reasonPhrase}\n${response.body}',
-        );
       }
+      throw Exception(
+        'HTTP ${response.statusCode}: ${response.reasonPhrase}\n${response.body}',
+      );
     } catch (e) {
-      // Re-throw with more context
       throw Exception('API request failed: $e');
     }
   }
 
-  /// Generic POST request handler
-  ///
-  /// Makes an HTTP POST request with JSON body
-  /// Returns parsed JSON response
   Future<Map<String, dynamic>> post(
     String endpoint,
     Map<String, dynamic> data,
   ) async {
     final url = Uri.parse(_buildUrl(endpoint));
-
     try {
-      print('Making POST request to: $url');
-      print('Request body: ${jsonEncode(data)}');
-
-      // Make HTTP POST request with JSON body
       final response = await http
           .post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(data),
-      )
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(data),
+          )
           .timeout(
-        Duration(seconds: timeoutSeconds),
-        onTimeout: () {
-          throw Exception('Request timeout after $timeoutSeconds seconds');
-        },
-      );
-
-      print('Response status: ${response.statusCode}');
-      print('Response body: ${response.body}');
+            Duration(seconds: timeoutSeconds),
+            onTimeout: () =>
+                throw Exception('Request timeout after $timeoutSeconds seconds'),
+          );
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         return jsonDecode(response.body) as Map<String, dynamic>;
-      } else {
+      }
+      throw Exception(
+        'HTTP ${response.statusCode}: ${response.reasonPhrase}\n${response.body}',
+      );
+    } catch (e) {
+      throw Exception('API request failed: $e');
+    }
+  }
+
+  Future<void> delete(String endpoint) async {
+    final url = Uri.parse(_buildUrl(endpoint));
+    try {
+      final response = await http.delete(url).timeout(
+        Duration(seconds: timeoutSeconds),
+        onTimeout: () =>
+            throw Exception('Request timeout after $timeoutSeconds seconds'),
+      );
+      if (response.statusCode != 200) {
         throw Exception(
           'HTTP ${response.statusCode}: ${response.reasonPhrase}\n${response.body}',
         );
@@ -118,27 +84,18 @@ class ApiService {
     }
   }
 
-  // ========== Specific API Endpoints ==========
-
-  /// GET /api/health - Health check endpoint
-  /// Tests basic API connectivity
   Future<Map<String, dynamic>> getHealth() async {
     return await get('/api/health');
   }
 
-  /// GET /api/courses - Fetch all courses
-  /// Returns list of courses from the database
-  Future<Map<String, dynamic>> getCourses() async {
-    return await get('/api/courses');
+  Future<List<Map<String, dynamic>>> getCourses() async {
+    final data = await get('/api/courses');
+    if (data is List) {
+      return data.cast<Map<String, dynamic>>();
+    }
+    throw Exception('Unexpected response type for courses');
   }
 
-  /// GET /api/student/{id} - Fetch student information
-  /// Returns student data by ID
-  Future<Map<String, dynamic>> getStudent(int studentId) async {
-    return await get('/api/students');
-  }
-
-  /// GET /api/students/search?q= - Search students for suggestions
   Future<List<Map<String, dynamic>>> searchStudents(String query) async {
     final data = await get('/api/students/search?q=${Uri.encodeComponent(query)}');
     if (data is List) {
@@ -147,23 +104,57 @@ class ApiService {
     throw Exception('Unexpected response type for search');
   }
 
-  /// GET /api/students/{student_id} - Fetch student detail
   Future<Map<String, dynamic>> getStudentDetail(String studentId) async {
     return await get('/api/students/$studentId');
   }
 
-  /// POST /api/chat - Send chat message to AdvisorAI
-  /// Sends user message and receives AI response
-  Future<Map<String, dynamic>> sendChatMessage(String message) async {
-    return await post('/api/chat', {
-      'message': message,
-      'timestamp': DateTime.now().toIso8601String(),
+  Future<List<Map<String, dynamic>>> getStudentCourses(String studentId) async {
+    final data = await get('/api/students/$studentId/courses');
+    if (data is List) {
+      return data.cast<Map<String, dynamic>>();
+    }
+    throw Exception('Unexpected response type for student courses');
+  }
+
+  Future<Map<String, dynamic>> addStudentCourse({
+    required String studentId,
+    required String courseCode,
+    required String status,
+    String? title,
+    int? credits,
+    String? term,
+    String? grade,
+  }) async {
+    return await post('/api/students/$studentId/courses', {
+      'course_code': courseCode,
+      'status': status,
+      if (title != null && title.isNotEmpty) 'title': title,
+      if (credits != null) 'credits': credits,
+      if (term != null && term.isNotEmpty) 'term': term,
+      if (grade != null && grade.isNotEmpty) 'grade': grade,
     });
   }
 
-  /// GET /api/recommendations/{student_id} - Get course recommendations
-  /// Returns personalized course recommendations for student
-  Future<Map<String, dynamic>> getRecommendations(int studentId) async {
-    return await get('/api/recommendations/$studentId');
+  Future<void> deleteStudentCourse(String studentId, int recordId) async {
+    await delete('/api/students/$studentId/courses/$recordId');
+  }
+
+  Future<Map<String, dynamic>> queryAdvisor({
+    required String question,
+    String? studentId,
+    int topK = 5,
+  }) async {
+    return await post('/api/query', {
+      'question': question,
+      if (studentId != null && studentId.isNotEmpty) 'student_id': studentId,
+      'top_k': topK,
+    });
+  }
+
+  Future<Map<String, dynamic>> sendChatMessage(
+    String message, {
+    String? studentId,
+  }) async {
+    return await queryAdvisor(question: message, studentId: studentId);
   }
 }

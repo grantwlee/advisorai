@@ -10,7 +10,7 @@ import '../services/api_service.dart';
 /// - Error handling
 /// - Future and FutureBuilder usage
 class ApiTestPage extends StatefulWidget {
-  const ApiTestPage({Key? key}) : super(key: key);
+  const ApiTestPage({super.key});
 
   @override
   State<ApiTestPage> createState() => _ApiTestPageState();

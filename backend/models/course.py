@@ -1,5 +1,7 @@
 from database import Base
 from sqlalchemy import Column, Integer, String
+from sqlalchemy.orm import relationship
+
 
 class Course(Base):
     __tablename__ = "courses"
@@ -8,3 +10,5 @@ class Course(Base):
     code = Column(String(20), nullable=False)
     title = Column(String(255), nullable=False)
     credits = Column(Integer, nullable=False)
+
+    student_records = relationship("StudentCourse", back_populates="course")

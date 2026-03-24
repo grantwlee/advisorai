@@ -1,0 +1,68 @@
+[
+  {
+    "id": "direct-cs-core",
+    "question": "What core courses are listed for the Computer Science BS?",
+    "expected_status": "answered",
+    "requires_citations": true
+  },
+  {
+    "id": "direct-is-major",
+    "question": "What major courses are listed for the Information Systems BBA?",
+    "expected_status": "answered",
+    "requires_citations": true
+  },
+  {
+    "id": "missing-data-refusal",
+    "question": "What is the current tuition for summer 2026?",
+    "expected_status": "refused",
+    "requires_citations": false
+  },
+  {
+    "id": "conflicting-bulletin-years",
+    "question": "Did the Computer Science BS have the same total credits in 2022-2023 and 2024-2025?",
+    "expected_status": "answered",
+    "requires_citations": true,
+    "requires_year_mention": true
+  },
+  {
+    "id": "student-cs-audit",
+    "question": "What do I have left?",
+    "student_id": "S1001",
+    "expected_status": "answered",
+    "requires_citations": true
+  },
+  {
+    "id": "student-is-audit",
+    "question": "What courses do I still need for my Information Systems major?",
+    "student_id": "S1002",
+    "expected_status": "answered",
+    "requires_citations": true
+  },
+  {
+    "id": "student-cs-bulletin-filter",
+    "question": "What bulletin year are my requirements coming from?",
+    "student_id": "S1001",
+    "expected_status": "answered",
+    "requires_citations": true,
+    "requires_year_mention": true
+  },
+  {
+    "id": "direct-database-course",
+    "question": "Which course is listed as Database Systems Design and Development?",
+    "expected_status": "answered",
+    "requires_citations": true
+  },
+  {
+    "id": "hallucination-guard",
+    "question": "Who teaches CPTR 999 Advanced Quantum Programming?",
+    "expected_status": "refused",
+    "requires_citations": false
+  },
+  {
+    "id": "year-qualified-conflict",
+    "question": "Compare the Computer Science BS bulletin entries across years and tell me whether anything changed.",
+    "expected_status": "answered",
+    "requires_citations": true,
+    "requires_year_mention": true
+  }
+]
