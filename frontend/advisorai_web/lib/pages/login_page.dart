@@ -1,48 +1,37 @@
 import 'package:flutter/material.dart';
 
-/// Login Page - Mock authentication interface
-/// Demonstrates:
-/// - Form input handling
-/// - State management with StatefulWidget
-/// - Navigation to dashboard
 class LoginPage extends StatefulWidget {
-  const LoginPage({Key? key}) : super(key: key);
+  const LoginPage({super.key});
 
   @override
   State<LoginPage> createState() => _LoginPageState();
 }
 
 class _LoginPageState extends State<LoginPage> {
-  // Controller to access text field value
   final TextEditingController _usernameController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
 
   @override
   void dispose() {
-    // Clean up controller when widget is disposed
     _usernameController.dispose();
     super.dispose();
   }
 
-  /// Handle login button press
-  /// This is a mock implementation - no real authentication occurs
   Future<void> _handleLogin() async {
     if (_formKey.currentState!.validate()) {
       setState(() {
         _isLoading = true;
       });
 
-      // Simulate API call delay
-      await Future.delayed(const Duration(seconds: 1));
+      await Future.delayed(const Duration(milliseconds: 350));
 
       if (!mounted) return;
 
-      // Navigate to dashboard, passing username as argument
       Navigator.pushReplacementNamed(
         context,
         '/dashboard',
-        arguments: _usernameController.text,
+        arguments: _usernameController.text.trim(),
       );
     }
   }
@@ -73,7 +62,6 @@ class _LoginPageState extends State<LoginPage> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // App Logo/Title
                     Icon(
                       Icons.school,
                       size: 64,
@@ -91,7 +79,7 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Your Academic Planning Assistant',
+                      'Enter a student ID to open the self-service advisor view',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                             color: Colors.grey[600],
                           ),
@@ -99,17 +87,16 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                     const SizedBox(height: 32),
 
-                    // Username Field
                     TextFormField(
                       controller: _usernameController,
                       decoration: const InputDecoration(
-                        labelText: 'Username',
-                        hintText: 'Enter your username',
+                        labelText: 'Student ID',
+                        hintText: 'Try S1001 or S1002',
                         prefixIcon: Icon(Icons.person),
                       ),
                       validator: (value) {
                         if (value == null || value.isEmpty) {
-                          return 'Please enter a username';
+                          return 'Please enter a student ID';
                         }
                         return null;
                       },
@@ -117,7 +104,6 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                     const SizedBox(height: 24),
 
-                    // Login Button
                     FilledButton(
                       onPressed: _isLoading ? null : _handleLogin,
                       child: Padding(
@@ -132,7 +118,7 @@ class _LoginPageState extends State<LoginPage> {
                                 ),
                               )
                             : const Text(
-                                'Login',
+                                'Open Dashboard',
                                 style: TextStyle(fontSize: 16),
                               ),
                       ),
@@ -140,7 +126,6 @@ class _LoginPageState extends State<LoginPage> {
 
                     const SizedBox(height: 16),
 
-                    // API Test Link
                     TextButton(
                       onPressed: () {
                         Navigator.pushNamed(context, '/api-test');
@@ -149,10 +134,11 @@ class _LoginPageState extends State<LoginPage> {
                     ),
 
                     TextButton(
-                        onPressed: () {
-                          Navigator.pushNamed(context, '/student-search');
-                        },
-                        child: const Text('Student Search'))
+                      onPressed: () {
+                        Navigator.pushNamed(context, '/student-search');
+                      },
+                      child: const Text('Advisor Student Search'),
+                    )
                   ],
                 ),
               ),

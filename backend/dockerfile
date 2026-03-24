@@ -20,4 +20,4 @@ ENV PORT=5001
 
 EXPOSE 5001
 
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5001"]
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5001", "--workers", "1", "--timeout", "180", "--graceful-timeout", "30"]

@@ -13,7 +13,7 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not set")
 
 engine = create_engine(DATABASE_URL, echo=True)
-Session = sessionmaker(bind=engine)
+Session = sessionmaker(bind=engine, expire_on_commit=False)
 session = Session()
 
 Base = declarative_base()

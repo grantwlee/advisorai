@@ -43,10 +43,10 @@ class AdvisorAIApp extends StatelessWidget {
       initialRoute: '/',
       // Route definitions for navigation
       routes: {
-        '/': (context) => LoginPage(),
-        '/dashboard': (context) => DashboardPage(),
-        '/api-test': (context) => ApiTestPage(),
-        '/student-search': (context) => StudentSearchPage(),
+        '/': (context) => const LoginPage(),
+        '/dashboard': (context) => const DashboardPage(),
+        '/api-test': (context) => const ApiTestPage(),
+        '/student-search': (context) => const StudentSearchPage(),
       },
     );
   }

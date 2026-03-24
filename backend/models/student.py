@@ -3,6 +3,7 @@ from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
+
 class Student(Base):
     __tablename__ = "students"
 
@@ -14,3 +15,6 @@ class Student(Base):
     email = Column(String(120), unique=True, nullable=False)
     phone = Column(String(30), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    course_records = relationship("StudentCourse", back_populates="student")
+    advising_sessions = relationship("AdvisingSession", back_populates="student")
