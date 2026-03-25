@@ -61,10 +61,17 @@ def serialize_retrieved_chunks(chunks: list[dict]) -> list[dict]:
         }
         for chunk in chunks
     ]
+
+
+def env_flag(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
 class QueryService:
     def __init__(self) -> None:
         self.retrieval = get_retrieval_service()
         self.llm = OllamaClient()
+        self.use_degree_audit_rules = env_flag("USE_DEGREE_AUDIT_RULES", "false")
 
     def answer_question(
         self,
@@ -79,9 +86,13 @@ class QueryService:
         student = get_student_payload(student_id) if student_id else None
         bulletin_year = student.get("bulletin_year") if student else None
         program = student.get("program") if student else None
-        audit_summary = summarize_degree_audit(student) if student else None
-        planning_context = build_planning_context(student, audit_summary=audit_summary)
-        planning_question = is_planning_question(question)
+        audit_summary = None
+        planning_context = None
+        planning_question = False
+        if self.use_degree_audit_rules and student:
+            audit_summary = summarize_degree_audit(student)
+            planning_context = build_planning_context(student, audit_summary=audit_summary)
+            planning_question = is_planning_question(question)
 
         retrieval_started = time.perf_counter()
         if audit_summary:
