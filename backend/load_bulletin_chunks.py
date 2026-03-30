@@ -72,10 +72,10 @@ def load_rows(conn) -> tuple[int, int]:
             chunk_text
         ) VALUES (
             :bulletin_id,
-            'pdf',
+            :source_type,
             :bulletin_year,
-            NULL,
-            NULL,
+            :program,
+            :section_title,
             :page_number,
             :chunk_index,
             :chunk_hash,
@@ -97,7 +97,10 @@ def load_rows(conn) -> tuple[int, int]:
 
             params = {
                 "bulletin_id": row.get("bulletin"),
+                "source_type": row.get("sourceType", "pdf"),
                 "bulletin_year": row.get("bulletin"),
+                "program": row.get("program"),
+                "section_title": row.get("sectionTitle"),
                 "page_number": page_number,
                 "chunk_index": parse_chunk_index(row.get("chunkId", "")),
                 "chunk_hash": row.get("hash"),

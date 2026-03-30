@@ -5,11 +5,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from services.degree_audit import is_degree_audit_question, summarize_degree_audit
 from services.llm_client import LLMError, OllamaClient
-from services.planning_service import build_planning_context, is_planning_question
+from services.planning_service import build_planning_context
 from services.profile_service import get_student_payload
-from services.retrieval_service import get_retrieval_service
+from services.retrieval_service import DEFAULT_QUERY_SOURCE_TYPES, get_retrieval_service
 from services.verification import extract_citation_ids, split_sentences, verify_answer
 from services.year_utils import expand_bulletin_year
 
@@ -41,8 +40,13 @@ def build_citation_payload(answer: str, retrieved_chunks: list[dict]) -> list[di
                 "chunkId": row["chunkId"],
                 "bulletin": row["bulletin"],
                 "pageOccurrence": row.get("pageOccurrence") or [],
+                "sourcePageOccurrence": row.get("sourcePageOccurrence") or [],
+                "sourceChunkIds": row.get("sourceChunkIds") or [],
                 "preview": row["preview"],
                 "sourcePdf": row.get("sourcePdf"),
+                "sourceType": row.get("sourceType"),
+                "program": row.get("program"),
+                "sectionTitle": row.get("sectionTitle"),
             }
         )
         seen.add(chunk_id)
@@ -55,23 +59,23 @@ def serialize_retrieved_chunks(chunks: list[dict]) -> list[dict]:
             "chunkId": chunk["chunkId"],
             "bulletin": chunk["bulletin"],
             "pageOccurrence": chunk.get("pageOccurrence") or [],
+            "sourcePageOccurrence": chunk.get("sourcePageOccurrence") or [],
+            "sourceChunkIds": chunk.get("sourceChunkIds") or [],
             "preview": chunk["preview"],
             "sourcePdf": chunk.get("sourcePdf"),
+            "sourceType": chunk.get("sourceType"),
+            "program": chunk.get("program"),
+            "sectionTitle": chunk.get("sectionTitle"),
             "score": chunk.get("score"),
         }
         for chunk in chunks
     ]
 
 
-def env_flag(name: str, default: str = "false") -> bool:
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
-
-
 class QueryService:
     def __init__(self) -> None:
         self.retrieval = get_retrieval_service()
         self.llm = OllamaClient()
-        self.use_degree_audit_rules = env_flag("USE_DEGREE_AUDIT_RULES", "false")
 
     def answer_question(
         self,
@@ -86,41 +90,16 @@ class QueryService:
         student = get_student_payload(student_id) if student_id else None
         bulletin_year = student.get("bulletin_year") if student else None
         program = student.get("program") if student else None
-        audit_summary = None
-        planning_context = None
-        planning_question = False
-        if self.use_degree_audit_rules and student:
-            audit_summary = summarize_degree_audit(student)
-            planning_context = build_planning_context(student, audit_summary=audit_summary)
-            planning_question = is_planning_question(question)
+        planning_context = build_planning_context(student) if student else None
 
         retrieval_started = time.perf_counter()
-        if audit_summary:
-            if planning_question and planning_context:
-                retrieved_chunks = self._retrieve_planning_chunks(
-                    question,
-                    planning_context,
-                    top_k=max(top_k, 6),
-                )
-            elif is_degree_audit_question(question):
-                retrieved_chunks = self._retrieve_degree_audit_chunks(
-                    audit_summary,
-                    top_k=max(top_k, 6),
-                )
-            else:
-                retrieved_chunks = self.retrieval.hybrid_search(
-                    question,
-                    k=top_k,
-                    bulletin_year=bulletin_year,
-                    program=program,
-                )
-        else:
-            retrieved_chunks = self.retrieval.hybrid_search(
-                question,
-                k=top_k,
-                bulletin_year=bulletin_year,
-                program=program,
-            )
+        retrieved_chunks = self.retrieval.hybrid_search(
+            question,
+            k=top_k,
+            bulletin_year=bulletin_year,
+            program=program,
+            source_types=DEFAULT_QUERY_SOURCE_TYPES,
+        )
         timings_ms["retrieval"] = round((time.perf_counter() - retrieval_started) * 1000)
 
         if not retrieved_chunks:
@@ -142,7 +121,6 @@ class QueryService:
                 question=question,
                 retrieved_chunks=retrieved_chunks,
                 student=student,
-                audit_summary=audit_summary,
                 planning_context=planning_context,
             )
         except LLMError as exc:
@@ -168,7 +146,6 @@ class QueryService:
                 initial_result=llm_result,
                 retrieved_chunks=retrieved_chunks,
                 student=student,
-                audit_summary=audit_summary,
                 planning_context=planning_context,
             )
         except LLMError as exc:
@@ -213,7 +190,7 @@ class QueryService:
             "verifier": verified["verifier"],
             "timings_ms": timings_ms,
             "student_context": self._student_context(student),
-            "audit_summary": self._serialize_audit_summary(audit_summary),
+            "audit_summary": None,
             "planning_context": self._serialize_planning_context(planning_context),
         }
         self._log_event(response, question=question, student=student)
@@ -225,18 +202,19 @@ class QueryService:
         question: str,
         retrieved_chunks: list[dict],
         student: dict | None,
-        audit_summary: dict | None,
         planning_context: dict | None,
         rewrite_feedback: list[str] | None = None,
         prior_answer: str | None = None,
     ) -> dict:
         system_prompt = (
-            "You are AdvisorAI. Use only the retrieved bulletin chunks provided by the user. "
+            "You are AdvisorAI. Use only the retrieved bulletin summary chunks provided by the user. "
             "Do not use outside knowledge. If the evidence is insufficient, refuse. "
             "Return strict JSON with keys status, answer, refusal_reason. "
             "Keep answers brief: at most 2 sentences unless the question is a degree-audit question. "
             "When structured planning context is provided, treat it as the source of truth for the "
-            "student's completed, in-progress, and recommended courses. "
+            "student's completed, in-progress, and planned courses. "
+            "Never rely on unseen raw bulletin chunks; the summary chunks are the only bulletin evidence "
+            "available to you in this prompt. "
             "If status is answered, every sentence in answer must end with one or more chunk citations "
             "formatted like [23-24:007646] or [23-24:007646, 23-24:007652]. "
             "If multiple bulletin years are cited, explicitly name the year in the answer text. "
@@ -245,7 +223,6 @@ class QueryService:
         prompt = self._build_prompt(
             question=question,
             student=student,
-            audit_summary=audit_summary,
             planning_context=planning_context,
             retrieved_chunks=retrieved_chunks,
             rewrite_feedback=rewrite_feedback,
@@ -282,7 +259,6 @@ class QueryService:
         initial_result: dict,
         retrieved_chunks: list[dict],
         student: dict | None,
-        audit_summary: dict | None,
         planning_context: dict | None,
     ) -> dict:
         if initial_result["status"] != "answered":
@@ -317,7 +293,6 @@ class QueryService:
             question=question,
             retrieved_chunks=retrieved_chunks,
             student=student,
-            audit_summary=audit_summary,
             planning_context=planning_context,
             rewrite_feedback=verifier["issues"],
             prior_answer=initial_result["answer"],
@@ -419,15 +394,13 @@ class QueryService:
             "completed_course_codes": planning_context.get("completed_course_codes", [])[:12],
             "in_progress_course_codes": planning_context.get("in_progress_course_codes", [])[:8],
             "planned_course_codes": planning_context.get("planned_course_codes", [])[:8],
-            "remaining_requirement_count": planning_context.get("remaining_requirement_count"),
-            "remaining_credits": planning_context.get("remaining_credits"),
-            "recommended_next_courses": compact_courses(
-                planning_context.get("recommended_next_courses", []),
+            "in_progress_courses": compact_courses(
+                planning_context.get("in_progress_courses", []),
                 4,
             ),
-            "blocked_courses": compact_courses(
-                planning_context.get("blocked_courses", []),
-                3,
+            "planned_courses": compact_courses(
+                planning_context.get("planned_courses", []),
+                4,
             ),
         }
 
@@ -451,6 +424,10 @@ class QueryService:
                     "chunkId": chunk["chunkId"],
                     "bulletin": expand_bulletin_year(chunk["bulletin"]) or chunk["bulletin"],
                     "pageOccurrence": chunk.get("pageOccurrence") or [],
+                    "sourceType": chunk.get("sourceType"),
+                    "program": chunk.get("program"),
+                    "sectionTitle": chunk.get("sectionTitle"),
+                    "sourceChunkIds": (chunk.get("sourceChunkIds") or [])[:8],
                     "text": truncated,
                 }
             )
@@ -463,7 +440,6 @@ class QueryService:
         *,
         question: str,
         student: dict | None,
-        audit_summary: dict | None,
         planning_context: dict | None,
         retrieved_chunks: list[dict],
         rewrite_feedback: list[str] | None,
@@ -477,25 +453,15 @@ class QueryService:
                 f"program={student['program']}, bulletin_year={student['bulletin_year']}."
             )
 
-        if audit_summary:
-            lines.append("Deterministic degree-audit summary:")
-            lines.append(
-                json.dumps(self._serialize_audit_summary(audit_summary), indent=2)
-            )
-            lines.append(
-                "For audit questions, only describe the deterministic result above. "
-                "Do not invent requirements outside that summary."
-            )
-
         if planning_context:
             lines.append("Structured planning context:")
             lines.append(
                 json.dumps(self._compact_planning_context(planning_context), indent=2)
             )
             lines.append(
-                "For planning questions, use the structured planning context as the source of truth "
-                "for the student's progress and recommended next courses. Use bulletin chunks only "
-                "to support or qualify that plan."
+                "For planning questions, use the structured planning context for the student's saved "
+                "course history and current registrations. Use bulletin chunks to infer what matters "
+                "for the plan."
             )
 
         if prior_answer and rewrite_feedback:
@@ -510,70 +476,15 @@ class QueryService:
             lines.append(json.dumps(chunk, ensure_ascii=True))
 
         lines.append(
+            "These retrieved chunks are program-level bulletin summaries. "
+            "Treat sourceChunkIds as provenance only, not as additional text you can read."
+        )
+
+        lines.append(
             "If the chunks are insufficient, return "
             '{"status":"refused","answer":"","refusal_reason":"..."}'
         )
         return "\n".join(lines)
-
-    def _retrieve_degree_audit_chunks(self, audit_summary: dict, top_k: int) -> list[dict]:
-        chunk_by_id: dict[str, dict] = {}
-        bulletin_year = audit_summary.get("bulletin_year")
-        program = audit_summary.get("program")
-        queries = []
-        if audit_summary.get("summary_query"):
-            queries.append(audit_summary["summary_query"])
-
-        prioritized = audit_summary.get("remaining") or audit_summary.get("in_progress") or []
-        for requirement in prioritized[:4]:
-            queries.append(requirement.get("citation_query") or f"{program} {requirement['code']}")
-
-        for query in queries:
-            for chunk in self.retrieval.hybrid_search(
-                query,
-                k=2,
-                bulletin_year=bulletin_year,
-                program=program,
-            ):
-                chunk_by_id.setdefault(chunk["chunkId"], chunk)
-                if len(chunk_by_id) >= top_k:
-                    break
-            if len(chunk_by_id) >= top_k:
-                break
-
-        return list(chunk_by_id.values())[:top_k]
-
-    def _retrieve_planning_chunks(
-        self,
-        question: str,
-        planning_context: dict,
-        top_k: int,
-    ) -> list[dict]:
-        chunk_by_id: dict[str, dict] = {}
-        queries = [question]
-        if planning_context.get("summary_query"):
-            queries.insert(0, planning_context["summary_query"])
-
-        for requirement in planning_context.get("recommended_next_courses", [])[:3]:
-            queries.append(requirement.get("citation_query") or requirement["code"])
-        for requirement in planning_context.get("blocked_courses", [])[:2]:
-            queries.append(requirement.get("citation_query") or requirement["code"])
-        for requirement in planning_context.get("planned_courses", [])[:1]:
-            queries.append(requirement.get("citation_query") or requirement["code"])
-
-        for query in queries:
-            for chunk in self.retrieval.hybrid_search(
-                query,
-                k=2,
-                bulletin_year=planning_context.get("bulletin_year"),
-                program=planning_context.get("program"),
-            ):
-                chunk_by_id.setdefault(chunk["chunkId"], chunk)
-                if len(chunk_by_id) >= top_k:
-                    break
-            if len(chunk_by_id) >= top_k:
-                break
-
-        return list(chunk_by_id.values())[:top_k]
 
     def _refusal_response(
         self,
@@ -610,37 +521,20 @@ class QueryService:
             "bulletin_year": student["bulletin_year"],
         }
 
-    def _serialize_audit_summary(self, audit_summary: dict | None) -> dict | None:
-        if not audit_summary:
-            return None
-        return {
-            "program": audit_summary["program"],
-            "bulletin_year": audit_summary["bulletin_year"],
-            "scope_note": audit_summary.get("scope_note"),
-            "total_required": audit_summary["total_required"],
-            "completed": audit_summary["completed"],
-            "in_progress": audit_summary["in_progress"],
-            "remaining": audit_summary["remaining"],
-        }
-
     def _serialize_planning_context(self, planning_context: dict | None) -> dict | None:
         if not planning_context:
             return None
         return {
             "program": planning_context["program"],
             "bulletin_year": planning_context["bulletin_year"],
-            "scope_note": planning_context.get("scope_note"),
             "completed_course_codes": planning_context.get("completed_course_codes", []),
             "in_progress_course_codes": planning_context.get("in_progress_course_codes", []),
             "planned_course_codes": planning_context.get("planned_course_codes", []),
             "completed_credits": planning_context.get("completed_credits"),
             "in_progress_credits": planning_context.get("in_progress_credits"),
             "planned_credits": planning_context.get("planned_credits"),
-            "remaining_requirement_count": planning_context.get("remaining_requirement_count"),
-            "remaining_credits": planning_context.get("remaining_credits"),
-            "recommended_next_courses": planning_context.get("recommended_next_courses", []),
+            "in_progress_courses": planning_context.get("in_progress_courses", []),
             "planned_courses": planning_context.get("planned_courses", []),
-            "blocked_courses": planning_context.get("blocked_courses", []),
             "context_gaps": planning_context.get("context_gaps", []),
         }
 

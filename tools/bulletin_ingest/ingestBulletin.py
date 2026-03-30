@@ -2,7 +2,6 @@ import os
 import re
 import json
 import hashlib
-from dataclasses import dataclass
 from typing import List, Dict, Any, Tuple
 
 import fitz  # PyMuPDF
@@ -10,6 +9,11 @@ import numpy as np
 import faiss
 
 from sentence_transformers import SentenceTransformer
+
+try:
+    from .program_summary_chunks import build_program_summary_rows
+except ImportError:
+    from program_summary_chunks import build_program_summary_rows
 
 
 # ----------------------------
@@ -220,14 +224,20 @@ def ingest_bulletins():
 
         chunks = make_chunks(pages)
 
-        # Embed chunks
-        texts = [c["chunk"] for c in chunks]
-        if texts:
-            vectors = model.encode(texts, batch_size=32, show_progress_bar=True, normalize_embeddings=True)
+        raw_rows: List[Dict[str, Any]] = []
+        raw_vectors: List[np.ndarray] = []
+        raw_texts = [c["chunk"] for c in chunks]
+        if raw_texts:
+            raw_embeddings = model.encode(
+                raw_texts,
+                batch_size=32,
+                show_progress_bar=True,
+                normalize_embeddings=True,
+            )
         else:
-            vectors = np.zeros((0, 384), dtype=np.float32)
+            raw_embeddings = np.zeros((0, 384), dtype=np.float32)
 
-        for c, v in zip(chunks, vectors):
+        for c, v in zip(chunks, raw_embeddings):
             chunk_counter += 1
             chunk_id = f"{bulletin_label}:{chunk_counter:06d}"
             row = {
@@ -238,19 +248,66 @@ def ingest_bulletins():
                 "sourcePdf": os.path.basename(pdf_path),
                 "hash": stable_hash(c["chunk"]),
                 "charCount": c["charCount"],
+                "sourceType": "pdf",
+                "program": None,
+                "sectionTitle": None,
             }
-            all_rows.append(row)
-            all_vectors.append(np.array(v, dtype=np.float32))
+            raw_rows.append(row)
+            raw_vectors.append(np.array(v, dtype=np.float32))
+
+        summary_rows = build_program_summary_rows(
+            pages=pages,
+            raw_rows=raw_rows,
+            bulletin_label=bulletin_label,
+        )
+
+        # Embed chunks
+        texts = [row["chunk"] for row in summary_rows]
+        if texts:
+            vectors = model.encode(texts, batch_size=16, show_progress_bar=True, normalize_embeddings=True)
+        else:
+            vectors = np.zeros((0, 384), dtype=np.float32)
+
+        summary_output_rows: List[Dict[str, Any]] = []
+        summary_output_vectors: List[np.ndarray] = []
+        for row, v in zip(summary_rows, vectors):
+            chunk_counter += 1
+            chunk_id = f"{bulletin_label}:{chunk_counter:06d}"
+            summary_row = {
+                "chunkId": chunk_id,
+                "chunk": row["chunk"],
+                "pageOccurrence": row["pageOccurrence"],
+                "bulletin": bulletin_label,
+                "sourcePdf": os.path.basename(pdf_path),
+                "hash": stable_hash(row["chunk"]),
+                "charCount": row["charCount"],
+                "sourceType": row["sourceType"],
+                "program": row["program"],
+                "sectionTitle": row["sectionTitle"],
+                "sourcePageOccurrence": row.get("sourcePageOccurrence") or [],
+                "sourceChunkIds": row.get("sourceChunkIds") or [],
+            }
+            summary_output_rows.append(summary_row)
+            summary_output_vectors.append(np.array(v, dtype=np.float32))
+
+        all_rows.extend(raw_rows)
+        all_vectors.extend(raw_vectors)
+        all_rows.extend(summary_output_rows)
+        all_vectors.extend(summary_output_vectors)
 
         manifest["bulletins"].append({
             "bulletin": bulletin_label,
             "sourcePdf": os.path.basename(pdf_path),
             "pages": doc.page_count,
-            "chunks": len(chunks),
+            "rawChunks": len(raw_rows),
+            "programSummaryChunks": len(summary_rows),
         })
 
         doc.close()
-        print(f"{os.path.basename(pdf_path)} -> pages={len(pages)}, chunks={len(chunks)}")
+        print(
+            f"{os.path.basename(pdf_path)} -> pages={len(pages)}, "
+            f"raw_chunks={len(raw_rows)}, program_summary_chunks={len(summary_rows)}"
+        )
 
     # Write JSONL
     with open(OUT_JSONL, "w", encoding="utf-8") as f:

@@ -2,6 +2,7 @@ import json
 import os
 import re
 from functools import lru_cache
+from typing import Iterable
 
 import faiss
 import numpy as np
@@ -38,6 +39,7 @@ STOPWORDS = {
     "to",
     "with",
 }
+DEFAULT_QUERY_SOURCE_TYPES = ("program_summary",)
 
 def tokenize_program(program: str | None) -> list[str]:
     if not program:
@@ -77,6 +79,29 @@ class RetrievalService:
         token_hits = sum(1 for token in tokens if token in haystack)
         return token_hits >= min(2, len(tokens))
 
+    def _normalize_source_types(
+        self,
+        source_types: Iterable[str] | None,
+    ) -> set[str] | None:
+        if source_types is None:
+            return None
+
+        normalized = {
+            value.strip().lower()
+            for value in source_types
+            if isinstance(value, str) and value.strip()
+        }
+        return normalized or None
+
+    def _source_type_matches(
+        self,
+        row: dict,
+        allowed_source_types: set[str] | None,
+    ) -> bool:
+        if allowed_source_types is None:
+            return True
+        return (row.get("sourceType") or "pdf").lower() in allowed_source_types
+
     def _metadata_to_result(
         self,
         row: dict,
@@ -89,9 +114,14 @@ class RetrievalService:
             "chunkId": row["chunkId"],
             "bulletin": row["bulletin"],
             "pageOccurrence": row.get("pageOccurrence") or [],
+            "sourcePageOccurrence": row.get("sourcePageOccurrence") or [],
+            "sourceChunkIds": row.get("sourceChunkIds") or [],
             "preview": row["chunk"][:300],
             "chunk": row["chunk"],
             "sourcePdf": row.get("sourcePdf"),
+            "sourceType": row.get("sourceType"),
+            "program": row.get("program"),
+            "sectionTitle": row.get("sectionTitle"),
             "hash": row.get("hash"),
             "semanticScore": float(semantic_score),
             "keywordScore": float(keyword_score),
@@ -105,14 +135,19 @@ class RetrievalService:
         k: int = 10,
         bulletin_year: str | None = None,
         program: str | None = None,
+        source_types: Iterable[str] | None = None,
     ) -> list[dict]:
         target_year = normalize_bulletin_year(bulletin_year)
+        allowed_source_types = self._normalize_source_types(source_types)
         effective_query = query.strip()
         if program:
             effective_query = f"{program} {effective_query}".strip()
 
         q_vec = self.model.encode([effective_query], normalize_embeddings=True)
-        search_k = min(max(k * 8, k), len(self.metadata))
+        if allowed_source_types is None:
+            search_k = min(max(k * 8, k), len(self.metadata))
+        else:
+            search_k = len(self.metadata)
         scores, indices = self.index.search(np.array(q_vec, dtype=np.float32), search_k)
 
         results: list[dict] = []
@@ -123,7 +158,18 @@ class RetrievalService:
             row = self.metadata[idx]
             if target_year and normalize_bulletin_year(row.get("bulletin")) != target_year:
                 continue
-            if not self._program_matches(row.get("chunk", ""), program):
+            if not self._source_type_matches(row, allowed_source_types):
+                continue
+            searchable_text = "\n".join(
+                part
+                for part in (
+                    row.get("program"),
+                    row.get("sectionTitle"),
+                    row.get("chunk"),
+                )
+                if part
+            )
+            if not self._program_matches(searchable_text, program):
                 continue
 
             results.append(self._metadata_to_result(row, semantic_score=float(score)))
@@ -139,18 +185,27 @@ class RetrievalService:
         k: int = 10,
         bulletin_year: str | None = None,
         program: str | None = None,
+        source_types: Iterable[str] | None = None,
     ) -> list[dict]:
         clauses = [
             "to_tsvector('english', chunk_text) @@ plainto_tsquery('english', :q)"
         ]
         params: dict[str, object] = {"q": query, "k": int(k)}
         target_year = normalize_bulletin_year(bulletin_year)
+        allowed_source_types = self._normalize_source_types(source_types)
         if target_year:
             clauses.append("bulletin_year = :bulletin_year")
             params["bulletin_year"] = target_year
 
+        if allowed_source_types:
+            clauses.append("LOWER(COALESCE(source_type, 'pdf')) = ANY(:source_types)")
+            params["source_types"] = list(allowed_source_types)
+
         if program:
-            clauses.append("LOWER(chunk_text) LIKE :program_pattern")
+            clauses.append(
+                "(LOWER(COALESCE(program, '')) LIKE :program_pattern "
+                "OR LOWER(chunk_text) LIKE :program_pattern)"
+            )
             params["program_pattern"] = f"%{program.lower()}%"
 
         sql = text(
@@ -195,9 +250,14 @@ class RetrievalService:
                     "chunkId": chunk_id,
                     "bulletin": bulletin,
                     "pageOccurrence": [],
+                    "sourcePageOccurrence": [],
+                    "sourceChunkIds": [],
                     "preview": chunk_text[:300],
                     "chunk": chunk_text,
                     "sourcePdf": None,
+                    "sourceType": None,
+                    "program": None,
+                    "sectionTitle": None,
                     "hash": hash_key,
                     "semanticScore": 0.0,
                     "keywordScore": float(row.get("keyword_score") or 0.0),
@@ -214,12 +274,14 @@ class RetrievalService:
         k: int = 5,
         bulletin_year: str | None = None,
         program: str | None = None,
+        source_types: Iterable[str] | None = None,
     ) -> list[dict]:
         semantic_top = self.semantic_search(
             query,
             k=max(k, 10),
             bulletin_year=bulletin_year,
             program=program,
+            source_types=source_types,
         )
         try:
             keyword_top = self.keyword_search(
@@ -227,6 +289,7 @@ class RetrievalService:
                 k=max(k, 10),
                 bulletin_year=bulletin_year,
                 program=program,
+                source_types=source_types,
             )
         except SQLAlchemyError:
             keyword_top = []

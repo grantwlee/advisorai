@@ -49,9 +49,14 @@ def serialize_retrieval_result(row: dict) -> dict:
         "chunkId": row["chunkId"],
         "bulletin": row["bulletin"],
         "pageOccurrence": row.get("pageOccurrence") or [],
+        "sourcePageOccurrence": row.get("sourcePageOccurrence") or [],
+        "sourceChunkIds": row.get("sourceChunkIds") or [],
         "preview": row["preview"],
         "score": row.get("score", row.get("semanticScore", row.get("keywordScore", 0.0))),
         "sourcePdf": row.get("sourcePdf"),
+        "sourceType": row.get("sourceType"),
+        "program": row.get("program"),
+        "sectionTitle": row.get("sectionTitle"),
     }
 
 
@@ -336,6 +341,26 @@ def retrieve_hybrid():
         ), 500
 
     return jsonify({"query": query, "results": [serialize_retrieval_result(row) for row in results]})
+
+
+@app.get("/api/retrieve/chunks")
+def retrieve_chunks_by_id():
+    chunk_ids = [value.strip() for value in request.args.getlist("chunk_id") if value.strip()]
+    if not chunk_ids:
+        csv_ids = (request.args.get("chunk_ids") or "").strip()
+        if csv_ids:
+            chunk_ids = [value.strip() for value in csv_ids.split(",") if value.strip()]
+
+    if not chunk_ids:
+        return jsonify({"error": "chunk_id or chunk_ids is required"}), 400
+
+    results = retrieval_service.get_chunks(chunk_ids)
+    return jsonify(
+        {
+            "chunk_ids": chunk_ids,
+            "results": [serialize_retrieval_result(row) for row in results],
+        }
+    )
 
 
 @app.post("/api/query")

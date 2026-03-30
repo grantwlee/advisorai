@@ -12,22 +12,25 @@
       "bulletin": "22-23",
       "sourcePdf": "Bulletin+22-23+PDF-final.pdf",
       "pages": 665,
-      "chunks": 2829
+      "rawChunks": 2829,
+      "programSummaryChunks": 100
     },
     {
       "bulletin": "24-25",
       "sourcePdf": "Bulletin+24-25+PDF.pdf",
       "pages": 668,
-      "chunks": 2814
+      "rawChunks": 2814,
+      "programSummaryChunks": 94
     },
     {
       "bulletin": "23-24",
       "sourcePdf": "Bulletin_23-24_PDF_FINAL.pdf",
       "pages": 678,
-      "chunks": 2896
+      "rawChunks": 2896,
+      "programSummaryChunks": 97
     }
   ],
-  "totalChunks": 8539,
+  "totalChunks": 8830,
   "faissDim": 384,
   "faissIndexType": "IndexFlatIP (normalized embeddings)"
 }
