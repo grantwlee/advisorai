@@ -40,6 +40,8 @@ STOPWORDS = {
     "with",
 }
 DEFAULT_QUERY_SOURCE_TYPES = ("program_summary",)
+MANUAL_VERIFICATION_SOURCE_TYPES = ("pdf",)
+INDEXED_SOURCE_TYPES = {"program_summary"}
 
 def tokenize_program(program: str | None) -> list[str]:
     if not program:
@@ -57,11 +59,22 @@ class RetrievalService:
         self.processed_dir = processed_dir
         self.faiss_path = os.path.join(processed_dir, "bulletin_index.faiss")
         self.jsonl_path = os.path.join(processed_dir, "bulletin_chunks.jsonl")
+        self.index_metadata_path = os.path.join(processed_dir, "bulletin_index_metadata.jsonl")
         self.model = SentenceTransformer(MODEL_NAME)
         self.index = faiss.read_index(self.faiss_path)
 
         with open(self.jsonl_path, "r", encoding="utf-8") as handle:
             self.metadata = [json.loads(line) for line in handle]
+
+        if os.path.exists(self.index_metadata_path):
+            with open(self.index_metadata_path, "r", encoding="utf-8") as handle:
+                self.index_metadata = [json.loads(line) for line in handle]
+        else:
+            self.index_metadata = [
+                row
+                for row in self.metadata
+                if (row.get("sourceType") or "pdf").lower() in INDEXED_SOURCE_TYPES
+            ]
 
         self.metadata_by_hash = {
             row.get("hash"): row for row in self.metadata if row.get("hash")
@@ -114,6 +127,7 @@ class RetrievalService:
             "chunkId": row["chunkId"],
             "bulletin": row["bulletin"],
             "pageOccurrence": row.get("pageOccurrence") or [],
+            "programPageOccurrence": row.get("programPageOccurrence") or [],
             "sourcePageOccurrence": row.get("sourcePageOccurrence") or [],
             "sourceChunkIds": row.get("sourceChunkIds") or [],
             "preview": row["chunk"][:300],
@@ -122,6 +136,8 @@ class RetrievalService:
             "sourceType": row.get("sourceType"),
             "program": row.get("program"),
             "sectionTitle": row.get("sectionTitle"),
+            "sectionType": row.get("sectionType"),
+            "structuredData": row.get("structuredData"),
             "hash": row.get("hash"),
             "semanticScore": float(semantic_score),
             "keywordScore": float(keyword_score),
@@ -139,15 +155,20 @@ class RetrievalService:
     ) -> list[dict]:
         target_year = normalize_bulletin_year(bulletin_year)
         allowed_source_types = self._normalize_source_types(source_types)
+        if allowed_source_types is not None and allowed_source_types.isdisjoint(INDEXED_SOURCE_TYPES):
+            return []
+
         effective_query = query.strip()
         if program:
             effective_query = f"{program} {effective_query}".strip()
 
         q_vec = self.model.encode([effective_query], normalize_embeddings=True)
         if allowed_source_types is None:
-            search_k = min(max(k * 8, k), len(self.metadata))
+            search_k = min(max(k * 8, k), len(self.index_metadata))
         else:
-            search_k = len(self.metadata)
+            search_k = len(self.index_metadata)
+        if search_k <= 0:
+            return []
         scores, indices = self.index.search(np.array(q_vec, dtype=np.float32), search_k)
 
         results: list[dict] = []
@@ -155,7 +176,9 @@ class RetrievalService:
             if idx == -1:
                 continue
 
-            row = self.metadata[idx]
+            if idx >= len(self.index_metadata):
+                continue
+            row = self.index_metadata[idx]
             if target_year and normalize_bulletin_year(row.get("bulletin")) != target_year:
                 continue
             if not self._source_type_matches(row, allowed_source_types):
@@ -258,6 +281,8 @@ class RetrievalService:
                     "sourceType": None,
                     "program": None,
                     "sectionTitle": None,
+                    "sectionType": None,
+                    "structuredData": None,
                     "hash": hash_key,
                     "semanticScore": 0.0,
                     "keywordScore": float(row.get("keyword_score") or 0.0),

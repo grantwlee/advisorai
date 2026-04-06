@@ -11,9 +11,15 @@ import faiss
 from sentence_transformers import SentenceTransformer
 
 try:
-    from .program_summary_chunks import build_program_summary_rows
+    from .program_summary_chunks import (
+        build_program_summary_rows,
+        build_structured_program_catalog,
+    )
 except ImportError:
-    from program_summary_chunks import build_program_summary_rows
+    from program_summary_chunks import (
+        build_program_summary_rows,
+        build_structured_program_catalog,
+    )
 
 
 # ----------------------------
@@ -23,8 +29,10 @@ RAW_DIR = "data/bulletins/raw"
 OUT_DIR = "data/bulletins/processed"
 
 OUT_JSONL = os.path.join(OUT_DIR, "bulletin_chunks.jsonl")
+OUT_INDEX_JSONL = os.path.join(OUT_DIR, "bulletin_index_metadata.jsonl")
 OUT_MANIFEST = os.path.join(OUT_DIR, "bulletin_chunks_manifest.json")
 OUT_FAISS = os.path.join(OUT_DIR, "bulletin_index.faiss")
+OUT_PROGRAMS_JSON = os.path.join(OUT_DIR, "bulletin_program_structures.json")
 
 # Header/footer removal:
 # remove anything in the top X% and bottom Y% of a page
@@ -83,7 +91,7 @@ def extract_page_text_without_header_footer(doc: fitz.Document, page_index: int)
     footer_y = page_height * (1.0 - FOOTER_CUT)
 
     blocks = page.get_text("blocks")  # (x0,y0,x1,y1,"text",block_no,block_type)
-    kept: List[Tuple[float, str]] = []
+    kept: List[Tuple[float, float, float, float, str]] = []
 
     for b in blocks:
         x0, y0, x1, y1, text, *_ = b
@@ -101,12 +109,64 @@ def extract_page_text_without_header_footer(doc: fitz.Document, page_index: int)
         if re.fullmatch(r"\d{1,4}", t):
             continue
 
-        # Keep in reading order (y then x)
-        kept.append((y0, t))
+        kept.append((x0, y0, x1, y1, t))
 
-    kept.sort(key=lambda x: x[0])
-    combined = "\n".join([t for _, t in kept])
+    ordered = order_text_blocks_for_reading(kept, page.rect.width)
+    combined = "\n".join(text for *_, text in ordered)
     return normalize_whitespace(combined)
+
+
+def order_text_blocks_for_reading(
+    blocks: List[Tuple[float, float, float, float, str]],
+    page_width: float,
+) -> List[Tuple[float, float, float, float, str]]:
+    if not blocks:
+        return []
+
+    midpoint = page_width / 2.0
+    narrow_blocks = [block for block in blocks if (block[2] - block[0]) < page_width * 0.72]
+    left_blocks = [block for block in narrow_blocks if ((block[0] + block[2]) / 2.0) < midpoint]
+    right_blocks = [block for block in narrow_blocks if ((block[0] + block[2]) / 2.0) >= midpoint]
+    has_two_columns = len(left_blocks) >= 3 and len(right_blocks) >= 3
+
+    if not has_two_columns:
+        return sorted(blocks, key=lambda block: (block[1], block[0]))
+
+    column_top = min(block[1] for block in narrow_blocks)
+    column_bottom = max(block[3] for block in narrow_blocks)
+
+    leading_full: List[Tuple[float, float, float, float, str]] = []
+    trailing_full: List[Tuple[float, float, float, float, str]] = []
+    left_column: List[Tuple[float, float, float, float, str]] = []
+    right_column: List[Tuple[float, float, float, float, str]] = []
+
+    for block in blocks:
+        x0, y0, x1, y1, _text = block
+        center_x = (x0 + x1) / 2.0
+        width = x1 - x0
+
+        if width >= page_width * 0.72:
+            if y0 <= column_top:
+                leading_full.append(block)
+            elif y1 >= column_bottom:
+                trailing_full.append(block)
+            elif center_x < midpoint:
+                left_column.append(block)
+            else:
+                right_column.append(block)
+            continue
+
+        if center_x < midpoint:
+            left_column.append(block)
+        else:
+            right_column.append(block)
+
+    return (
+        sorted(leading_full, key=lambda block: (block[1], block[0]))
+        + sorted(left_column, key=lambda block: (block[1], block[0]))
+        + sorted(right_column, key=lambda block: (block[1], block[0]))
+        + sorted(trailing_full, key=lambda block: (block[1], block[0]))
+    )
 
 
 def make_chunks(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -198,7 +258,9 @@ def ingest_bulletins():
     model = SentenceTransformer(MODEL_NAME)
 
     all_rows: List[Dict[str, Any]] = []
-    all_vectors: List[np.ndarray] = []
+    indexed_rows: List[Dict[str, Any]] = []
+    indexed_vectors: List[np.ndarray] = []
+    structured_catalogs: List[Dict[str, Any]] = []
 
     chunk_counter = 0
     manifest = {
@@ -225,19 +287,7 @@ def ingest_bulletins():
         chunks = make_chunks(pages)
 
         raw_rows: List[Dict[str, Any]] = []
-        raw_vectors: List[np.ndarray] = []
-        raw_texts = [c["chunk"] for c in chunks]
-        if raw_texts:
-            raw_embeddings = model.encode(
-                raw_texts,
-                batch_size=32,
-                show_progress_bar=True,
-                normalize_embeddings=True,
-            )
-        else:
-            raw_embeddings = np.zeros((0, 384), dtype=np.float32)
-
-        for c, v in zip(chunks, raw_embeddings):
+        for c in chunks:
             chunk_counter += 1
             chunk_id = f"{bulletin_label}:{chunk_counter:06d}"
             row = {
@@ -253,12 +303,18 @@ def ingest_bulletins():
                 "sectionTitle": None,
             }
             raw_rows.append(row)
-            raw_vectors.append(np.array(v, dtype=np.float32))
 
         summary_rows = build_program_summary_rows(
             pages=pages,
             raw_rows=raw_rows,
             bulletin_label=bulletin_label,
+        )
+        structured_catalogs.append(
+            build_structured_program_catalog(
+                summary_rows=summary_rows,
+                bulletin_label=bulletin_label,
+                source_pdf=os.path.basename(pdf_path),
+            )
         )
 
         # Embed chunks
@@ -269,7 +325,6 @@ def ingest_bulletins():
             vectors = np.zeros((0, 384), dtype=np.float32)
 
         summary_output_rows: List[Dict[str, Any]] = []
-        summary_output_vectors: List[np.ndarray] = []
         for row, v in zip(summary_rows, vectors):
             chunk_counter += 1
             chunk_id = f"{bulletin_label}:{chunk_counter:06d}"
@@ -284,16 +339,18 @@ def ingest_bulletins():
                 "sourceType": row["sourceType"],
                 "program": row["program"],
                 "sectionTitle": row["sectionTitle"],
+                "sectionType": row.get("sectionType"),
                 "sourcePageOccurrence": row.get("sourcePageOccurrence") or [],
                 "sourceChunkIds": row.get("sourceChunkIds") or [],
+                "programPageOccurrence": row.get("programPageOccurrence") or [],
+                "structuredData": row.get("structuredData"),
             }
             summary_output_rows.append(summary_row)
-            summary_output_vectors.append(np.array(v, dtype=np.float32))
+            indexed_rows.append(summary_row)
+            indexed_vectors.append(np.array(v, dtype=np.float32))
 
         all_rows.extend(raw_rows)
-        all_vectors.extend(raw_vectors)
         all_rows.extend(summary_output_rows)
-        all_vectors.extend(summary_output_vectors)
 
         manifest["bulletins"].append({
             "bulletin": bulletin_label,
@@ -301,6 +358,7 @@ def ingest_bulletins():
             "pages": doc.page_count,
             "rawChunks": len(raw_rows),
             "programSummaryChunks": len(summary_rows),
+            "indexedChunks": len(summary_output_rows),
         })
 
         doc.close()
@@ -314,11 +372,15 @@ def ingest_bulletins():
         for r in all_rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-    # Build FAISS.   
-    if not all_vectors:
+    with open(OUT_INDEX_JSONL, "w", encoding="utf-8") as f:
+        for r in indexed_rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    # Build FAISS only from structured program-summary chunks.
+    if not indexed_vectors:
         raise RuntimeError("No vectors produced. Check header/footer cuts or PDF extraction.")
 
-    mat = np.vstack(all_vectors).astype(np.float32)
+    mat = np.vstack(indexed_vectors).astype(np.float32)
     dim = mat.shape[1]
 
     index = faiss.IndexFlatIP(dim)  # cosine-like because we normalized embeddings
@@ -327,16 +389,22 @@ def ingest_bulletins():
 
     # Manifest
     manifest["totalChunks"] = len(all_rows)
+    manifest["totalIndexedChunks"] = len(indexed_rows)
     manifest["faissDim"] = dim
     manifest["faissIndexType"] = "IndexFlatIP (normalized embeddings)"
 
     with open(OUT_MANIFEST, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
+    with open(OUT_PROGRAMS_JSON, "w", encoding="utf-8") as f:
+        json.dump(structured_catalogs, f, ensure_ascii=False, indent=2)
+
     print("\nDONE")
     print(f"JSONL:   {OUT_JSONL}")
+    print(f"IndexMeta:{OUT_INDEX_JSONL}")
     print(f"FAISS:   {OUT_FAISS}")
     print(f"Manifest:{OUT_MANIFEST}")
+    print(f"Programs:{OUT_PROGRAMS_JSON}")
 
 
 if __name__ == "__main__":

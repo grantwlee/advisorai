@@ -19,6 +19,9 @@ DEFAULT_REFUSAL = (
 )
 PROMPT_CHUNK_CHAR_LIMIT = int(os.getenv("LLM_PROMPT_CHUNK_CHAR_LIMIT", "600"))
 PROMPT_TOTAL_CHARS = int(os.getenv("LLM_PROMPT_TOTAL_CHARS", "2400"))
+PROMPT_PROGRAM_PROFILE_CHAR_LIMIT = int(
+    os.getenv("LLM_PROMPT_PROGRAM_PROFILE_CHAR_LIMIT", "8000")
+)
 LOG_PATH = Path(
     os.getenv(
         "QUERY_LOG_PATH",
@@ -40,6 +43,7 @@ def build_citation_payload(answer: str, retrieved_chunks: list[dict]) -> list[di
                 "chunkId": row["chunkId"],
                 "bulletin": row["bulletin"],
                 "pageOccurrence": row.get("pageOccurrence") or [],
+                "programPageOccurrence": row.get("programPageOccurrence") or [],
                 "sourcePageOccurrence": row.get("sourcePageOccurrence") or [],
                 "sourceChunkIds": row.get("sourceChunkIds") or [],
                 "preview": row["preview"],
@@ -47,6 +51,8 @@ def build_citation_payload(answer: str, retrieved_chunks: list[dict]) -> list[di
                 "sourceType": row.get("sourceType"),
                 "program": row.get("program"),
                 "sectionTitle": row.get("sectionTitle"),
+                "sectionType": row.get("sectionType"),
+                "structuredData": row.get("structuredData"),
             }
         )
         seen.add(chunk_id)
@@ -59,6 +65,7 @@ def serialize_retrieved_chunks(chunks: list[dict]) -> list[dict]:
             "chunkId": chunk["chunkId"],
             "bulletin": chunk["bulletin"],
             "pageOccurrence": chunk.get("pageOccurrence") or [],
+            "programPageOccurrence": chunk.get("programPageOccurrence") or [],
             "sourcePageOccurrence": chunk.get("sourcePageOccurrence") or [],
             "sourceChunkIds": chunk.get("sourceChunkIds") or [],
             "preview": chunk["preview"],
@@ -66,6 +73,8 @@ def serialize_retrieved_chunks(chunks: list[dict]) -> list[dict]:
             "sourceType": chunk.get("sourceType"),
             "program": chunk.get("program"),
             "sectionTitle": chunk.get("sectionTitle"),
+            "sectionType": chunk.get("sectionType"),
+            "structuredData": chunk.get("structuredData"),
             "score": chunk.get("score"),
         }
         for chunk in chunks
@@ -411,8 +420,16 @@ class QueryService:
             if budget_remaining <= 0:
                 break
 
-            chunk_text = re.sub(r"\s+", " ", chunk.get("chunk", "")).strip()
-            truncated = chunk_text[: min(PROMPT_CHUNK_CHAR_LIMIT, budget_remaining)].strip()
+            structured = chunk.get("structuredData")
+            structured_kind = structured.get("kind") if isinstance(structured, dict) else None
+            if structured_kind == "program_profile":
+                chunk_text = json.dumps(structured.get("program") or {}, ensure_ascii=True)
+                char_limit = min(PROMPT_PROGRAM_PROFILE_CHAR_LIMIT, budget_remaining)
+            else:
+                chunk_text = re.sub(r"\s+", " ", chunk.get("chunk", "")).strip()
+                char_limit = min(PROMPT_CHUNK_CHAR_LIMIT, budget_remaining)
+
+            truncated = chunk_text[:char_limit].strip()
             if not truncated:
                 continue
 
@@ -424,10 +441,13 @@ class QueryService:
                     "chunkId": chunk["chunkId"],
                     "bulletin": expand_bulletin_year(chunk["bulletin"]) or chunk["bulletin"],
                     "pageOccurrence": chunk.get("pageOccurrence") or [],
+                    "programPageOccurrence": chunk.get("programPageOccurrence") or [],
                     "sourceType": chunk.get("sourceType"),
                     "program": chunk.get("program"),
                     "sectionTitle": chunk.get("sectionTitle"),
+                    "sectionType": chunk.get("sectionType"),
                     "sourceChunkIds": (chunk.get("sourceChunkIds") or [])[:8],
+                    "structuredDataKind": structured_kind,
                     "text": truncated,
                 }
             )
@@ -476,7 +496,8 @@ class QueryService:
             lines.append(json.dumps(chunk, ensure_ascii=True))
 
         lines.append(
-            "These retrieved chunks are program-level bulletin summaries. "
+            "These retrieved chunks are structured bulletin summaries. "
+            "A chunk may represent a full program profile with all requirements or a legacy section-level summary. "
             "Treat sourceChunkIds as provenance only, not as additional text you can read."
         )
 
