@@ -201,6 +201,8 @@ class QueryService:
             "Use [planning_context] only for facts taken from the student's saved course history or "
             "planning data. Use bulletin chunk citations only for bulletin requirements or policy claims. "
             "Keep planning-context facts and bulletin-requirement facts in separate sentences whenever possible. "
+            "Treat the 'Bulletin requirement evidence' section as catalog-derived requirements and rules, "
+            "not as the student's personal course history or progress. "
             "If multiple bulletin years are cited, explicitly name the year in the answer text. "
             "Do not mention chunks that were not provided."
         )
@@ -500,6 +502,8 @@ class QueryService:
 
             prompt_chunks.append(
                 {
+                    "recordType": "bulletin_requirement_evidence",
+                    "evidenceLabel": "course_requirements_and_bulletin_rules",
                     "chunkId": chunk["chunkId"],
                     "bulletin": expand_bulletin_year(chunk["bulletin"]) or chunk["bulletin"],
                     "pageOccurrence": chunk.get("pageOccurrence") or [],
@@ -552,7 +556,11 @@ class QueryService:
             for issue in rewrite_feedback:
                 lines.append(f"- {issue}")
 
-        lines.append("Retrieved chunks:")
+        lines.append("Bulletin requirement evidence:")
+        lines.append(
+            "Everything in this section is bulletin-derived requirement evidence, not student-specific "
+            "course history, enrollment, or progress data."
+        )
         for chunk in self._prompt_ready_chunks(retrieved_chunks):
             lines.append(json.dumps(chunk, ensure_ascii=True))
 

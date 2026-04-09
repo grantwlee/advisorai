@@ -326,6 +326,11 @@ class QueryServiceTests(unittest.TestCase):
         prompt_chunks = service._prompt_ready_chunks(retrieved)
 
         self.assertEqual(len(prompt_chunks), 1)
+        self.assertEqual(prompt_chunks[0]["recordType"], "bulletin_requirement_evidence")
+        self.assertEqual(
+            prompt_chunks[0]["evidenceLabel"],
+            "course_requirements_and_bulletin_rules",
+        )
         self.assertEqual(prompt_chunks[0]["chunkId"], "23-24:007677")
         self.assertEqual(prompt_chunks[0]["text"], "A" * 4000)
 
@@ -347,6 +352,53 @@ class QueryServiceTests(unittest.TestCase):
         prompt_chunks = service._prompt_ready_chunks(retrieved)
 
         self.assertEqual(prompt_chunks[0]["text"], "Program Profile: Computer Science BS\nTotal Credits - 120")
+
+    def test_build_prompt_separates_bulletin_requirement_evidence_from_student_context(self):
+        service = object.__new__(QueryService)
+
+        prompt = service._build_prompt(
+            question="What do I have left?",
+            student={
+                "student_id": "S1001",
+                "name": "Alex Johnson",
+                "program": "Computer Science",
+                "bulletin_year": "2023-2024",
+            },
+            planning_context={
+                "program": "Computer Science",
+                "bulletin_year": "2023-2024",
+                "completed_course_codes": ["CPTR 151"],
+                "in_progress_course_codes": [],
+                "planned_course_codes": [],
+                "in_progress_courses": [],
+                "planned_courses": [],
+            },
+            retrieved_chunks=[
+                {
+                    "chunkId": "23-24:007678",
+                    "bulletin": "23-24",
+                    "pageOccurrence": [479],
+                    "programPageOccurrence": [479],
+                    "chunk": "Program Profile: Computer Science BS\nTotal Credits - 120",
+                    "sourceType": "program_summary",
+                    "program": "Computer Science BS",
+                    "sectionTitle": "Computer Science BS",
+                    "sectionType": "program_profile",
+                    "sourceChunkIds": [],
+                    "structuredData": {"kind": "program_profile"},
+                }
+            ],
+            rewrite_feedback=None,
+            prior_answer=None,
+        )
+
+        self.assertIn("Structured planning context:", prompt)
+        self.assertIn("Bulletin requirement evidence:", prompt)
+        self.assertIn(
+            "Everything in this section is bulletin-derived requirement evidence",
+            prompt,
+        )
+        self.assertIn("\"recordType\": \"bulletin_requirement_evidence\"", prompt)
 
     def test_generate_answer_retries_after_invalid_json_error(self):
         service = object.__new__(QueryService)
