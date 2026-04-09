@@ -4,36 +4,28 @@
   "model": "sentence-transformers/all-MiniLM-L6-v2",
   "headerCutPct": 0.08,
   "footerCutPct": 0.08,
-  "minChars": 1200,
-  "maxChars": 1500,
-  "overlapChars": 80,
+  "chunkFormat": "program_profile",
   "bulletins": [
     {
       "bulletin": "22-23",
       "sourcePdf": "Bulletin+22-23+PDF-final.pdf",
       "pages": 665,
-      "rawChunks": 2829,
-      "programSummaryChunks": 203,
-      "indexedChunks": 203
+      "programSummaryChunks": 203
     },
     {
       "bulletin": "24-25",
       "sourcePdf": "Bulletin+24-25+PDF.pdf",
       "pages": 668,
-      "rawChunks": 2815,
-      "programSummaryChunks": 208,
-      "indexedChunks": 208
+      "programSummaryChunks": 208
     },
     {
       "bulletin": "23-24",
       "sourcePdf": "Bulletin_23-24_PDF_FINAL.pdf",
       "pages": 678,
-      "rawChunks": 2896,
-      "programSummaryChunks": 180,
-      "indexedChunks": 180
+      "programSummaryChunks": 180
     }
   ],
-  "totalChunks": 9131,
+  "totalChunks": 591,
   "totalIndexedChunks": 591,
   "faissDim": 384,
   "faissIndexType": "IndexFlatIP (normalized embeddings)"

@@ -22,7 +22,6 @@ from services.profile_service import (
 from services.query_service import QueryService
 from services.retrieval_service import (
     DEFAULT_QUERY_SOURCE_TYPES,
-    MANUAL_VERIFICATION_SOURCE_TYPES,
     get_retrieval_service,
 )
 from services.runtime_setup import ensure_runtime_schema
@@ -68,18 +67,6 @@ def serialize_retrieval_result(row: dict) -> dict:
 
 
 def resolve_retrieval_source_types(args) -> tuple[str, ...] | None:
-    source_types = [value.strip() for value in args.getlist("source_type") if value.strip()]
-    if not source_types:
-        csv_types = (args.get("source_types") or "").strip()
-        if csv_types:
-            source_types = [value.strip() for value in csv_types.split(",") if value.strip()]
-    if source_types:
-        return tuple(source_types)
-
-    mode = (args.get("mode") or "").strip().lower()
-    if mode == "verification":
-        return MANUAL_VERIFICATION_SOURCE_TYPES
-
     return DEFAULT_QUERY_SOURCE_TYPES
 
 
@@ -386,99 +373,6 @@ def retrieve_hybrid():
         {
             "query": query,
             "source_types": list(source_types) if source_types is not None else None,
-            "results": [serialize_retrieval_result(row) for row in results],
-        }
-    )
-
-
-@app.get("/api/retrieve/verification")
-def retrieve_hybrid_verification():
-    query = request.args.get("q", "").strip()
-    if not query:
-        return jsonify({"error": "q required"}), 400
-
-    k = int(request.args.get("k", 5))
-    bulletin_year = request.args.get("bulletin_year")
-    program = request.args.get("program")
-    try:
-        results = retrieval_service.hybrid_search(
-            query,
-            k=k,
-            bulletin_year=bulletin_year,
-            program=program,
-            source_types=MANUAL_VERIFICATION_SOURCE_TYPES,
-        )
-    except SQLAlchemyError as exc:
-        return jsonify(
-            {
-                "error": "Hybrid verification retrieval failed in keyword step. Ensure bulletin_chunks and FTS index exist.",
-                "detail": str(exc),
-            }
-        ), 500
-
-    return jsonify(
-        {
-            "query": query,
-            "source_types": list(MANUAL_VERIFICATION_SOURCE_TYPES),
-            "results": [serialize_retrieval_result(row) for row in results],
-        }
-    )
-
-
-@app.get("/api/retrieve/verification/semantic")
-def retrieve_semantic_verification():
-    query = request.args.get("q", "").strip()
-    if not query:
-        return jsonify({"error": "q required"}), 400
-
-    k = int(request.args.get("k", 5))
-    bulletin_year = request.args.get("bulletin_year")
-    program = request.args.get("program")
-    results = retrieval_service.semantic_search(
-        query,
-        k=k,
-        bulletin_year=bulletin_year,
-        program=program,
-        source_types=MANUAL_VERIFICATION_SOURCE_TYPES,
-    )
-    return jsonify(
-        {
-            "query": query,
-            "source_types": list(MANUAL_VERIFICATION_SOURCE_TYPES),
-            "results": [serialize_retrieval_result(row) for row in results],
-        }
-    )
-
-
-@app.get("/api/retrieve/verification/keyword")
-def retrieve_keyword_verification():
-    query = request.args.get("q", "").strip()
-    if not query:
-        return jsonify({"error": "q required"}), 400
-
-    k = int(request.args.get("k", 5))
-    bulletin_year = request.args.get("bulletin_year")
-    program = request.args.get("program")
-    try:
-        results = retrieval_service.keyword_search(
-            query,
-            k=k,
-            bulletin_year=bulletin_year,
-            program=program,
-            source_types=MANUAL_VERIFICATION_SOURCE_TYPES,
-        )
-    except SQLAlchemyError as exc:
-        return jsonify(
-            {
-                "error": "Keyword verification retrieval failed. Ensure bulletin_chunks and FTS index exist.",
-                "detail": str(exc),
-            }
-        ), 500
-
-    return jsonify(
-        {
-            "query": query,
-            "source_types": list(MANUAL_VERIFICATION_SOURCE_TYPES),
             "results": [serialize_retrieval_result(row) for row in results],
         }
     )

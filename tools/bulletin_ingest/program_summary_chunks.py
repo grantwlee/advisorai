@@ -92,7 +92,6 @@ COURSE_ENTRY_PATTERN = re.compile(
 def build_program_summary_rows(
     *,
     pages: list[dict[str, Any]],
-    raw_rows: list[dict[str, Any]],
     bulletin_label: str,
 ) -> list[dict[str, Any]]:
     entries = parse_program_entries(pages)
@@ -107,9 +106,6 @@ def build_program_summary_rows(
             continue
 
         program_pages = [page["pageNumber"] for page in page_slices]
-        program_source_chunk_ids = _source_chunk_ids_for_pages(raw_rows, program_pages)
-        if not program_source_chunk_ids:
-            continue
 
         line_rows = extract_program_line_rows(page_slices)
         if not line_rows:
@@ -120,7 +116,6 @@ def build_program_summary_rows(
         chunk_text = format_program_profile_chunk(
             program_profile=profile,
             bulletin_label=bulletin_label,
-            source_chunk_ids=program_source_chunk_ids,
         )
         if not chunk_text:
             continue
@@ -135,7 +130,7 @@ def build_program_summary_rows(
                 "sectionTitle": entry["title"],
                 "sectionType": "program_profile",
                 "sourcePageOccurrence": program_pages,
-                "sourceChunkIds": program_source_chunk_ids,
+                "sourceChunkIds": [],
                 "programPageOccurrence": program_pages,
                 "structuredData": {
                     "kind": "program_profile",
@@ -564,7 +559,6 @@ def format_program_profile_chunk(
     *,
     program_profile: dict[str, Any],
     bulletin_label: str,
-    source_chunk_ids: list[str],
 ) -> str:
     lines = [
         f"Program Profile: {program_profile['program']}",
@@ -598,8 +592,6 @@ def format_program_profile_chunk(
             "",
             "Structured Program Data",
             json.dumps(program_profile, ensure_ascii=True, separators=(",", ":")),
-            "",
-            f"Source Raw Chunks: {', '.join(source_chunk_ids)}",
         ]
     )
     return "\n".join(lines).strip()
@@ -811,17 +803,6 @@ def _join_section_lines(lines: list[str]) -> str:
             continue
         normalized.append(line)
     return "\n".join(normalized).strip()
-
-
-def _source_chunk_ids_for_pages(raw_rows: list[dict[str, Any]], pages: list[int]) -> list[str]:
-    page_set = set(pages)
-    return [
-        row["chunkId"]
-        for row in raw_rows
-        if row.get("sourceType") == "pdf"
-        and set(row.get("pageOccurrence") or []).intersection(page_set)
-    ]
-
 
 def _new_section(
     *,

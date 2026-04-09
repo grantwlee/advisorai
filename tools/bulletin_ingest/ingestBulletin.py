@@ -29,7 +29,6 @@ RAW_DIR = "data/bulletins/raw"
 OUT_DIR = "data/bulletins/processed"
 
 OUT_JSONL = os.path.join(OUT_DIR, "bulletin_chunks.jsonl")
-OUT_INDEX_JSONL = os.path.join(OUT_DIR, "bulletin_index_metadata.jsonl")
 OUT_MANIFEST = os.path.join(OUT_DIR, "bulletin_chunks_manifest.json")
 OUT_FAISS = os.path.join(OUT_DIR, "bulletin_index.faiss")
 OUT_PROGRAMS_JSON = os.path.join(OUT_DIR, "bulletin_program_structures.json")
@@ -38,11 +37,6 @@ OUT_PROGRAMS_JSON = os.path.join(OUT_DIR, "bulletin_program_structures.json")
 # remove anything in the top X% and bottom Y% of a page
 HEADER_CUT = 0.08   # top 8% of page height
 FOOTER_CUT = 0.08   # bottom 8% of page height
-
-# Chunking
-MIN_CHARS = 1200
-MAX_CHARS = 1500
-CHUNK_OVERLAP_CHARS = 80
 
 # Embeddings
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
@@ -169,78 +163,6 @@ def order_text_blocks_for_reading(
     )
 
 
-def make_chunks(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    pages: [{pageNumber: int, text: str}]
-    Returns chunk dicts with pageOccurrence mapping.
-    Chunking is done on the full cleaned document text, while tracking which pages contribute.
-    """
-    # Build a single document string but keep page spans
-    full = []
-    spans = []  # (start_idx, end_idx, pageNumber)
-    cursor = 0
-
-    for p in pages:
-        t = p["text"]
-        if not t:
-            continue
-        start = cursor
-        full.append(t)
-        cursor += len(t)
-        end = cursor
-        spans.append((start, end, p["pageNumber"]))
-        # add separator
-        full.append("\n\n")
-        cursor += 2
-
-    doc_text = "".join(full).strip()
-    if not doc_text:
-        return []
-
-    chunks = []
-    n = len(doc_text)
-    step = MAX_CHARS - CHUNK_OVERLAP_CHARS
-    start = 0
-    seen_ranges: set[tuple[int, int]] = set()
-
-    while start < n:
-        end = min(start + MAX_CHARS, n)
-
-        # Keep the tail within min/max by shifting the final window left.
-        if end == n and (end - start) < MIN_CHARS and n > MIN_CHARS:
-            start = max(0, n - MIN_CHARS)
-            end = n
-
-        range_key = (start, end)
-        if range_key in seen_ranges:
-            break
-        seen_ranges.add(range_key)
-
-        chunk_text = normalize_whitespace(doc_text[start:end])
-        if len(chunk_text) < MIN_CHARS:
-            break
-
-        page_occurrence = sorted(
-            {
-                pg
-                for span_start, span_end, pg in spans
-                if not (end <= span_start or start >= span_end)
-            }
-        )
-
-        chunks.append({
-            "chunk": chunk_text,
-            "pageOccurrence": page_occurrence,
-            "charCount": len(chunk_text),
-        })
-
-        if end == n:
-            break
-        start += step
-
-    return chunks
-
-
 # ----------------------------
 # Main pipeline
 # ----------------------------
@@ -258,8 +180,7 @@ def ingest_bulletins():
     model = SentenceTransformer(MODEL_NAME)
 
     all_rows: List[Dict[str, Any]] = []
-    indexed_rows: List[Dict[str, Any]] = []
-    indexed_vectors: List[np.ndarray] = []
+    all_vectors: List[np.ndarray] = []
     structured_catalogs: List[Dict[str, Any]] = []
 
     chunk_counter = 0
@@ -269,9 +190,7 @@ def ingest_bulletins():
         "model": MODEL_NAME,
         "headerCutPct": HEADER_CUT,
         "footerCutPct": FOOTER_CUT,
-        "minChars": MIN_CHARS,
-        "maxChars": MAX_CHARS,
-        "overlapChars": CHUNK_OVERLAP_CHARS,
+        "chunkFormat": "program_profile",
         "bulletins": []
     }
 
@@ -284,29 +203,8 @@ def ingest_bulletins():
             text = extract_page_text_without_header_footer(doc, pno)
             pages.append({"pageNumber": pno + 1, "text": text})
 
-        chunks = make_chunks(pages)
-
-        raw_rows: List[Dict[str, Any]] = []
-        for c in chunks:
-            chunk_counter += 1
-            chunk_id = f"{bulletin_label}:{chunk_counter:06d}"
-            row = {
-                "chunkId": chunk_id,
-                "chunk": c["chunk"],
-                "pageOccurrence": c["pageOccurrence"],
-                "bulletin": bulletin_label,
-                "sourcePdf": os.path.basename(pdf_path),
-                "hash": stable_hash(c["chunk"]),
-                "charCount": c["charCount"],
-                "sourceType": "pdf",
-                "program": None,
-                "sectionTitle": None,
-            }
-            raw_rows.append(row)
-
         summary_rows = build_program_summary_rows(
             pages=pages,
-            raw_rows=raw_rows,
             bulletin_label=bulletin_label,
         )
         structured_catalogs.append(
@@ -346,25 +244,20 @@ def ingest_bulletins():
                 "structuredData": row.get("structuredData"),
             }
             summary_output_rows.append(summary_row)
-            indexed_rows.append(summary_row)
-            indexed_vectors.append(np.array(v, dtype=np.float32))
-
-        all_rows.extend(raw_rows)
-        all_rows.extend(summary_output_rows)
+            all_rows.append(summary_row)
+            all_vectors.append(np.array(v, dtype=np.float32))
 
         manifest["bulletins"].append({
             "bulletin": bulletin_label,
             "sourcePdf": os.path.basename(pdf_path),
             "pages": doc.page_count,
-            "rawChunks": len(raw_rows),
-            "programSummaryChunks": len(summary_rows),
-            "indexedChunks": len(summary_output_rows),
+            "programSummaryChunks": len(summary_output_rows),
         })
 
         doc.close()
         print(
             f"{os.path.basename(pdf_path)} -> pages={len(pages)}, "
-            f"raw_chunks={len(raw_rows)}, program_summary_chunks={len(summary_rows)}"
+            f"program_summary_chunks={len(summary_rows)}"
         )
 
     # Write JSONL
@@ -372,15 +265,11 @@ def ingest_bulletins():
         for r in all_rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-    with open(OUT_INDEX_JSONL, "w", encoding="utf-8") as f:
-        for r in indexed_rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-    # Build FAISS only from structured program-summary chunks.
-    if not indexed_vectors:
+    # Build FAISS from the same program-summary rows written to bulletin_chunks.jsonl.
+    if not all_vectors:
         raise RuntimeError("No vectors produced. Check header/footer cuts or PDF extraction.")
 
-    mat = np.vstack(indexed_vectors).astype(np.float32)
+    mat = np.vstack(all_vectors).astype(np.float32)
     dim = mat.shape[1]
 
     index = faiss.IndexFlatIP(dim)  # cosine-like because we normalized embeddings
@@ -389,7 +278,7 @@ def ingest_bulletins():
 
     # Manifest
     manifest["totalChunks"] = len(all_rows)
-    manifest["totalIndexedChunks"] = len(indexed_rows)
+    manifest["totalIndexedChunks"] = len(all_rows)
     manifest["faissDim"] = dim
     manifest["faissIndexType"] = "IndexFlatIP (normalized embeddings)"
 
@@ -401,7 +290,6 @@ def ingest_bulletins():
 
     print("\nDONE")
     print(f"JSONL:   {OUT_JSONL}")
-    print(f"IndexMeta:{OUT_INDEX_JSONL}")
     print(f"FAISS:   {OUT_FAISS}")
     print(f"Manifest:{OUT_MANIFEST}")
     print(f"Programs:{OUT_PROGRAMS_JSON}")

@@ -30,7 +30,7 @@ def create_table_and_index(conn, dialect: str) -> None:
             CREATE TABLE IF NOT EXISTS bulletin_chunks (
                 id BIGSERIAL PRIMARY KEY,
                 bulletin_id TEXT,
-                source_type TEXT DEFAULT 'pdf',
+                source_type TEXT DEFAULT 'program_summary',
                 bulletin_year TEXT,
                 program TEXT,
                 section_title TEXT,
@@ -46,12 +46,25 @@ def create_table_and_index(conn, dialect: str) -> None:
     conn.execute(
         text(
             """
+            ALTER TABLE bulletin_chunks
+            ALTER COLUMN source_type SET DEFAULT 'program_summary'
+            """
+        )
+    )
+
+    conn.execute(
+        text(
+            """
             CREATE INDEX IF NOT EXISTS idx_bulletin_chunks_tsv
             ON bulletin_chunks
             USING GIN (to_tsvector('english', chunk_text))
             """
         )
     )
+
+
+def clear_existing_rows(conn) -> None:
+    conn.execute(text("DELETE FROM bulletin_chunks"))
 
 
 def load_rows(conn) -> tuple[int, int]:
@@ -97,7 +110,7 @@ def load_rows(conn) -> tuple[int, int]:
 
             params = {
                 "bulletin_id": row.get("bulletin"),
-                "source_type": row.get("sourceType", "pdf"),
+                "source_type": row.get("sourceType", "program_summary"),
                 "bulletin_year": row.get("bulletin"),
                 "program": row.get("program"),
                 "section_title": row.get("sectionTitle"),
@@ -129,6 +142,7 @@ def main() -> None:
 
     with engine.begin() as conn:
         create_table_and_index(conn, dialect)
+        clear_existing_rows(conn)
         inserted, skipped = load_rows(conn)
 
     print(f"Inserted: {inserted}")

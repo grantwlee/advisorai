@@ -40,8 +40,6 @@ STOPWORDS = {
     "with",
 }
 DEFAULT_QUERY_SOURCE_TYPES = ("program_summary",)
-MANUAL_VERIFICATION_SOURCE_TYPES = ("pdf",)
-INDEXED_SOURCE_TYPES = {"program_summary"}
 
 def tokenize_program(program: str | None) -> list[str]:
     if not program:
@@ -59,22 +57,13 @@ class RetrievalService:
         self.processed_dir = processed_dir
         self.faiss_path = os.path.join(processed_dir, "bulletin_index.faiss")
         self.jsonl_path = os.path.join(processed_dir, "bulletin_chunks.jsonl")
-        self.index_metadata_path = os.path.join(processed_dir, "bulletin_index_metadata.jsonl")
         self.model = SentenceTransformer(MODEL_NAME)
         self.index = faiss.read_index(self.faiss_path)
 
         with open(self.jsonl_path, "r", encoding="utf-8") as handle:
             self.metadata = [json.loads(line) for line in handle]
 
-        if os.path.exists(self.index_metadata_path):
-            with open(self.index_metadata_path, "r", encoding="utf-8") as handle:
-                self.index_metadata = [json.loads(line) for line in handle]
-        else:
-            self.index_metadata = [
-                row
-                for row in self.metadata
-                if (row.get("sourceType") or "pdf").lower() in INDEXED_SOURCE_TYPES
-            ]
+        self.index_metadata = list(self.metadata)
 
         self.metadata_by_hash = {
             row.get("hash"): row for row in self.metadata if row.get("hash")
@@ -113,7 +102,7 @@ class RetrievalService:
     ) -> bool:
         if allowed_source_types is None:
             return True
-        return (row.get("sourceType") or "pdf").lower() in allowed_source_types
+        return (row.get("sourceType") or "program_summary").lower() in allowed_source_types
 
     def _metadata_to_result(
         self,
@@ -155,8 +144,6 @@ class RetrievalService:
     ) -> list[dict]:
         target_year = normalize_bulletin_year(bulletin_year)
         allowed_source_types = self._normalize_source_types(source_types)
-        if allowed_source_types is not None and allowed_source_types.isdisjoint(INDEXED_SOURCE_TYPES):
-            return []
 
         effective_query = query.strip()
         if program:
@@ -221,7 +208,7 @@ class RetrievalService:
             params["bulletin_year"] = target_year
 
         if allowed_source_types:
-            clauses.append("LOWER(COALESCE(source_type, 'pdf')) = ANY(:source_types)")
+            clauses.append("LOWER(COALESCE(source_type, 'program_summary')) = ANY(:source_types)")
             params["source_types"] = list(allowed_source_types)
 
         if program:
@@ -278,7 +265,7 @@ class RetrievalService:
                     "preview": chunk_text[:300],
                     "chunk": chunk_text,
                     "sourcePdf": None,
-                    "sourceType": None,
+                    "sourceType": "program_summary",
                     "program": None,
                     "sectionTitle": None,
                     "sectionType": None,

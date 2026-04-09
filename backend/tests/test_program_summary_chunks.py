@@ -65,27 +65,8 @@ class ProgramSummaryChunkTests(unittest.TestCase):
                 ),
             },
         ]
-        raw_rows = [
-            {
-                "chunkId": "23-24:000101",
-                "sourceType": "pdf",
-                "pageOccurrence": [10],
-            },
-            {
-                "chunkId": "23-24:000102",
-                "sourceType": "pdf",
-                "pageOccurrence": [10, 11],
-            },
-            {
-                "chunkId": "23-24:000103",
-                "sourceType": "pdf",
-                "pageOccurrence": [12],
-            },
-        ]
-
         rows = build_program_summary_rows(
             pages=pages,
-            raw_rows=raw_rows,
             bulletin_label="23-24",
         )
 
@@ -96,7 +77,7 @@ class ProgramSummaryChunkTests(unittest.TestCase):
         self.assertEqual(cs_row["sectionType"], "program_profile")
         self.assertEqual(cs_row["pageOccurrence"], [10, 11])
         self.assertEqual(cs_row["programPageOccurrence"], [10, 11])
-        self.assertEqual(cs_row["sourceChunkIds"], ["23-24:000101", "23-24:000102"])
+        self.assertEqual(cs_row["sourceChunkIds"], [])
         self.assertIn("Program Profile: Computer Science BS", cs_row["chunk"])
         self.assertIn("Program Type: major", cs_row["chunk"])
 
