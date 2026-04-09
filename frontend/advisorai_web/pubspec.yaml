@@ -15,6 +15,7 @@ dependencies:
   
   # HTTP client for API requests
   http: ^1.6.0
+  url_launcher: ^6.3.1
 
 dev_dependencies:
   flutter_test:

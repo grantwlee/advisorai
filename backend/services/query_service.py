@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from services.chunk_serialization import serialize_chunk_reference
 from services.llm_client import LLMError, OllamaClient
 from services.planning_service import build_planning_context
 from services.profile_service import get_student_payload
@@ -40,47 +41,13 @@ def build_citation_payload(answer: str, retrieved_chunks: list[dict]) -> list[di
         if chunk_id in seen or chunk_id not in by_id:
             continue
         row = by_id[chunk_id]
-        citations.append(
-            {
-                "chunkId": row["chunkId"],
-                "bulletin": row["bulletin"],
-                "pageOccurrence": row.get("pageOccurrence") or [],
-                "programPageOccurrence": row.get("programPageOccurrence") or [],
-                "sourcePageOccurrence": row.get("sourcePageOccurrence") or [],
-                "sourceChunkIds": row.get("sourceChunkIds") or [],
-                "preview": row["preview"],
-                "sourcePdf": row.get("sourcePdf"),
-                "sourceType": row.get("sourceType"),
-                "program": row.get("program"),
-                "sectionTitle": row.get("sectionTitle"),
-                "sectionType": row.get("sectionType"),
-                "structuredData": row.get("structuredData"),
-            }
-        )
+        citations.append(serialize_chunk_reference(row))
         seen.add(chunk_id)
     return citations
 
 
 def serialize_retrieved_chunks(chunks: list[dict]) -> list[dict]:
-    return [
-        {
-            "chunkId": chunk["chunkId"],
-            "bulletin": chunk["bulletin"],
-            "pageOccurrence": chunk.get("pageOccurrence") or [],
-            "programPageOccurrence": chunk.get("programPageOccurrence") or [],
-            "sourcePageOccurrence": chunk.get("sourcePageOccurrence") or [],
-            "sourceChunkIds": chunk.get("sourceChunkIds") or [],
-            "preview": chunk["preview"],
-            "sourcePdf": chunk.get("sourcePdf"),
-            "sourceType": chunk.get("sourceType"),
-            "program": chunk.get("program"),
-            "sectionTitle": chunk.get("sectionTitle"),
-            "sectionType": chunk.get("sectionType"),
-            "structuredData": chunk.get("structuredData"),
-            "score": chunk.get("score"),
-        }
-        for chunk in chunks
-    ]
+    return [serialize_chunk_reference(chunk, include_score=True) for chunk in chunks]
 
 
 class QueryService:

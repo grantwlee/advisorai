@@ -2,13 +2,14 @@ import os
 import traceback
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 
 from database import engine, session
 from models import AdvisingSession, Course, Student, StudentCourse
+from services.chunk_serialization import serialize_chunk_reference
 from services.llm_client import LLMError, OllamaClient
 from services.profile_service import (
     add_or_update_student_course,
@@ -45,29 +46,35 @@ if DB_DIALECT != "postgresql":
 retrieval_service = get_retrieval_service()
 query_service = QueryService()
 llm_client = OllamaClient()
+BULLETIN_PDF_DIR = os.path.abspath(
+    os.getenv(
+        "BULLETIN_PDF_DIR",
+        os.path.join(app.root_path, "..", "data", "bulletins", "raw"),
+    )
+)
 
 
 def serialize_retrieval_result(row: dict) -> dict:
-    return {
-        "chunkId": row["chunkId"],
-        "bulletin": row["bulletin"],
-        "pageOccurrence": row.get("pageOccurrence") or [],
-        "programPageOccurrence": row.get("programPageOccurrence") or [],
-        "sourcePageOccurrence": row.get("sourcePageOccurrence") or [],
-        "sourceChunkIds": row.get("sourceChunkIds") or [],
-        "preview": row["preview"],
-        "score": row.get("score", row.get("semanticScore", row.get("keywordScore", 0.0))),
-        "sourcePdf": row.get("sourcePdf"),
-        "sourceType": row.get("sourceType"),
-        "program": row.get("program"),
-        "sectionTitle": row.get("sectionTitle"),
-        "sectionType": row.get("sectionType"),
-        "structuredData": row.get("structuredData"),
-    }
+    serialized = serialize_chunk_reference(row, include_score=True)
+    serialized["score"] = row.get(
+        "score",
+        row.get("semanticScore", row.get("keywordScore", 0.0)),
+    )
+    return serialized
 
 
 def resolve_retrieval_source_types(args) -> tuple[str, ...] | None:
     return DEFAULT_QUERY_SOURCE_TYPES
+
+
+@app.get("/api/bulletins/pdf/<path:filename>")
+def bulletin_pdf(filename):
+    return send_from_directory(
+        BULLETIN_PDF_DIR,
+        filename,
+        mimetype="application/pdf",
+        as_attachment=False,
+    )
 
 
 @app.route("/api/health")

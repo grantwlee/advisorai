@@ -7,7 +7,7 @@ import socket
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.planning_service import build_planning_context, is_planning_question
-from services.query_service import QueryService
+from services.query_service import QueryService, build_citation_payload
 from services.retrieval_service import DEFAULT_QUERY_SOURCE_TYPES
 from services.llm_client import LLMError, OllamaClient
 from services.verification import extract_citation_ids, verify_answer
@@ -133,6 +133,44 @@ class PlanningServiceTests(unittest.TestCase):
 
 
 class QueryServiceTests(unittest.TestCase):
+    def test_build_citation_payload_includes_pdf_page_links(self):
+        citations = build_citation_payload(
+            "Computer Science requires 120 credits [23-24:009001].",
+            [
+                {
+                    "chunkId": "23-24:009001",
+                    "bulletin": "23-24",
+                    "pageOccurrence": [479, 480],
+                    "sourcePageOccurrence": [479, 480],
+                    "preview": "Program Summary: Computer Science BS",
+                    "chunk": "Program Summary: Computer Science BS\nTotal Credits - 120",
+                    "sourcePdf": "Bulletin_23-24.pdf",
+                    "sourceType": "program_summary",
+                    "program": "Computer Science BS",
+                    "sectionTitle": "Computer Science BS",
+                }
+            ],
+        )
+
+        self.assertEqual(citations[0]["pdfUrl"], "/api/bulletins/pdf/Bulletin_23-24.pdf")
+        self.assertEqual(
+            citations[0]["pdfPageUrl"],
+            "/api/bulletins/pdf/Bulletin_23-24.pdf#page=479",
+        )
+        self.assertEqual(
+            citations[0]["pdfPageLinks"],
+            [
+                {
+                    "page": 479,
+                    "url": "/api/bulletins/pdf/Bulletin_23-24.pdf#page=479",
+                },
+                {
+                    "page": 480,
+                    "url": "/api/bulletins/pdf/Bulletin_23-24.pdf#page=480",
+                },
+            ],
+        )
+
     @patch("services.query_service.get_student_payload")
     def test_answer_question_retrieves_summary_chunks_only(self, mock_get_student_payload):
         service = object.__new__(QueryService)
@@ -194,6 +232,14 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(response["status"], "answered")
         self.assertEqual(response["student_context"]["student_id"], "S1001")
         self.assertEqual(response["citations"][0]["sourceType"], "program_summary")
+        self.assertEqual(
+            response["citations"][0]["pdfPageUrl"],
+            "/api/bulletins/pdf/Bulletin_23-24.pdf#page=479",
+        )
+        self.assertEqual(
+            response["retrieved_chunks"][0]["pdfPageLinks"][1]["url"],
+            "/api/bulletins/pdf/Bulletin_23-24.pdf#page=480",
+        )
 
     def test_repair_answer_citations_adds_supporting_chunk_id(self):
         service = object.__new__(QueryService)

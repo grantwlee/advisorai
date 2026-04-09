@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/api_service.dart';
 
@@ -787,7 +788,6 @@ class _CitationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final pages = (citation['pageOccurrence'] as List<dynamic>? ?? []).join(', ');
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       color:
@@ -801,7 +801,7 @@ class _CitationCard extends StatelessWidget {
               '${citation['chunkId']} • Bulletin ${citation['bulletin']}',
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
-            if (pages.isNotEmpty) Text('Pages: $pages'),
+            _PdfLinkSection(data: citation),
             const SizedBox(height: 6),
             Text(citation['preview']?.toString() ?? ''),
           ],
@@ -818,20 +818,104 @@ class _RetrievedChunkTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final pages = (chunk['pageOccurrence'] as List<dynamic>? ?? []).join(', ');
     return ExpansionTile(
       tilePadding: EdgeInsets.zero,
       title: Text('${chunk['chunkId']} • score ${chunk['score'] ?? ''}'),
       subtitle: Text('Bulletin ${chunk['bulletin']}'),
       childrenPadding: const EdgeInsets.only(bottom: 12),
       children: [
-        if (pages.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text('Pages: $pages'),
-          ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: _PdfLinkSection(data: chunk),
+        ),
         SelectableText(chunk['preview']?.toString() ?? ''),
       ],
+    );
+  }
+}
+
+class _PdfLinkSection extends StatelessWidget {
+  final Map<String, dynamic> data;
+
+  const _PdfLinkSection({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final sourcePdf = data['sourcePdf']?.toString();
+    final pdfUrl = data['pdfUrl']?.toString();
+    final pageLinks =
+        (data['pdfPageLinks'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+    final pages = (data['sourcePageOccurrence'] as List<dynamic>? ??
+            data['pageOccurrence'] as List<dynamic>? ??
+            [])
+        .join(', ');
+
+    if ((sourcePdf == null || sourcePdf.isEmpty) &&
+        (pdfUrl == null || pdfUrl.isEmpty) &&
+        pageLinks.isEmpty &&
+        pages.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (sourcePdf != null && sourcePdf.isNotEmpty)
+          Text(
+            sourcePdf,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        if ((pdfUrl != null && pdfUrl.isNotEmpty) || pageLinks.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (pdfUrl != null && pdfUrl.isNotEmpty)
+                OutlinedButton.icon(
+                  onPressed: () => _openExternalUrl(context, pdfUrl),
+                  icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                  label: const Text('Open PDF'),
+                ),
+              ...pageLinks.map(
+                (link) => ActionChip(
+                  label: Text('Page ${link['page']}'),
+                  onPressed: () =>
+                      _openExternalUrl(context, link['url']?.toString() ?? ''),
+                ),
+              ),
+            ],
+          ),
+        ] else if (pages.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text('Pages: $pages'),
+          ),
+      ],
+    );
+  }
+}
+
+Uri _resolveExternalUri(String rawUrl) {
+  final parsed = Uri.tryParse(rawUrl);
+  if (parsed == null) {
+    return Uri();
+  }
+  if (parsed.hasScheme) {
+    return parsed;
+  }
+  return Uri.base.resolveUri(parsed);
+}
+
+Future<void> _openExternalUrl(BuildContext context, String rawUrl) async {
+  if (rawUrl.isEmpty) {
+    return;
+  }
+  final uri = _resolveExternalUri(rawUrl);
+  final opened = await launchUrl(uri, webOnlyWindowName: '_blank');
+  if (!opened && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Unable to open $rawUrl')),
     );
   }
 }
