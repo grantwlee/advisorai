@@ -46,6 +46,45 @@ class VerificationTests(unittest.TestCase):
             any("multiple bulletin years" in issue.lower() for issue in result["issues"])
         )
 
+    def test_verify_answer_accepts_planning_context_citation(self):
+        result = verify_answer(
+            "You have completed 3 courses and are currently taking 1 course in your Computer Science program [planning_context].",
+            [],
+            planning_context={
+                "program": "Computer Science",
+                "bulletin_year": "2023-2024",
+                "completed_course_codes": ["CPTR 151", "CPTR 152", "CPTR 230"],
+                "in_progress_course_codes": ["CPTR 276"],
+                "planned_course_codes": [],
+                "completed_credits": 9,
+                "in_progress_credits": 3,
+                "planned_credits": 0,
+                "in_progress_courses": [{"code": "CPTR 276", "title": "Data Structures and Algorithms", "credits": 3}],
+                "planned_courses": [],
+            },
+        )
+
+        self.assertTrue(result["passed"])
+
+    def test_verify_answer_rejects_citation_only_sentence(self):
+        retrieved = [
+            {
+                "chunkId": "23-24:000579",
+                "bulletin": "23-24",
+                "pageOccurrence": [479],
+                "preview": "Computer Science BS",
+                "chunk": "Computer Science BS total credits 120",
+            }
+        ]
+
+        result = verify_answer(
+            "Computer Science requires 120 credits [23-24:000579]. [23-24:000579]",
+            retrieved,
+        )
+
+        self.assertFalse(result["passed"])
+        self.assertTrue(any("only citations" in issue.lower() for issue in result["issues"]))
+
 
 class PlanningServiceTests(unittest.TestCase):
     def test_is_planning_question_detects_next_semester_language(self):
@@ -147,7 +186,7 @@ class QueryServiceTests(unittest.TestCase):
 
         service.retrieval.hybrid_search.assert_called_once_with(
             "What do I have left?",
-            k=4,
+            k=1,
             bulletin_year="2023-2024",
             program="Computer Science",
             source_types=DEFAULT_QUERY_SOURCE_TYPES,
@@ -173,13 +212,61 @@ class QueryServiceTests(unittest.TestCase):
         repaired = service._repair_answer_citations(
             "Computer Science students follow the 2023-2024 bulletin requirements.",
             retrieved,
+            None,
         )
 
         self.assertIn("[23-24:007600]", repaired)
         verified = verify_answer(repaired, retrieved)
         self.assertTrue(verified["passed"])
 
-    def test_build_prompt_truncates_chunk_payload(self):
+    def test_repair_answer_citations_can_use_planning_context(self):
+        service = object.__new__(QueryService)
+        repaired = service._repair_answer_citations(
+            "You have completed 3 courses and are currently taking 1 course in your Computer Science program.",
+            [],
+            {
+                "program": "Computer Science",
+                "bulletin_year": "2023-2024",
+                "completed_course_codes": ["CPTR 151", "CPTR 152", "CPTR 230"],
+                "in_progress_course_codes": ["CPTR 276"],
+                "planned_course_codes": [],
+                "completed_credits": 9,
+                "in_progress_credits": 3,
+                "planned_credits": 0,
+                "in_progress_courses": [{"code": "CPTR 276", "title": "Data Structures and Algorithms", "credits": 3}],
+                "planned_courses": [],
+            },
+        )
+
+        self.assertIn("[planning_context]", repaired)
+        verified = verify_answer(
+            repaired,
+            [],
+            planning_context={
+                "program": "Computer Science",
+                "bulletin_year": "2023-2024",
+                "completed_course_codes": ["CPTR 151", "CPTR 152", "CPTR 230"],
+                "in_progress_course_codes": ["CPTR 276"],
+                "planned_course_codes": [],
+                "completed_credits": 9,
+                "in_progress_credits": 3,
+                "planned_credits": 0,
+                "in_progress_courses": [{"code": "CPTR 276", "title": "Data Structures and Algorithms", "credits": 3}],
+                "planned_courses": [],
+            },
+        )
+        self.assertTrue(verified["passed"])
+
+    def test_normalize_answer_removes_citation_only_sentence(self):
+        service = object.__new__(QueryService)
+
+        normalized = service._normalize_answer(
+            "Computer Science requires 120 credits [23-24:000579]. [23-24:000579]"
+        )
+
+        self.assertEqual(normalized, "Computer Science requires 120 credits [23-24:000579].")
+
+    def test_prompt_ready_chunks_include_full_chunk_payload(self):
         service = object.__new__(QueryService)
         retrieved = [
             {
@@ -190,18 +277,66 @@ class QueryServiceTests(unittest.TestCase):
             }
         ]
 
-        prompt = service._build_prompt(
-            question="What does INFS 428 cover?",
+        prompt_chunks = service._prompt_ready_chunks(retrieved)
+
+        self.assertEqual(len(prompt_chunks), 1)
+        self.assertEqual(prompt_chunks[0]["chunkId"], "23-24:007677")
+        self.assertEqual(prompt_chunks[0]["text"], "A" * 4000)
+
+    def test_prompt_ready_chunks_use_chunk_text_for_program_profiles(self):
+        service = object.__new__(QueryService)
+        retrieved = [
+            {
+                "chunkId": "23-24:007678",
+                "bulletin": "23-24",
+                "pageOccurrence": [479],
+                "chunk": "Program Profile: Computer Science BS\nTotal Credits - 120",
+                "structuredData": {
+                    "kind": "program_profile",
+                    "program": {"program": "Computer Science BS", "summary": {"total_credits": "120"}},
+                },
+            }
+        ]
+
+        prompt_chunks = service._prompt_ready_chunks(retrieved)
+
+        self.assertEqual(prompt_chunks[0]["text"], "Program Profile: Computer Science BS\nTotal Credits - 120")
+
+    def test_generate_answer_retries_after_invalid_json_error(self):
+        service = object.__new__(QueryService)
+        service.llm = Mock()
+        service.llm.generate_json.side_effect = [
+            LLMError("LLM returned invalid JSON: {bad"),
+            {"status": "answered", "answer": "Answer [23-24:000001].", "refusal_reason": None},
+        ]
+
+        result = service._generate_answer(
+            question="What do I have left?",
+            retrieved_chunks=[{"chunkId": "23-24:000001", "bulletin": "23-24", "chunk": "Program Profile"}],
             student=None,
             planning_context=None,
-            retrieved_chunks=retrieved,
-            rewrite_feedback=None,
-            prior_answer=None,
         )
 
-        self.assertIn('"chunkId": "23-24:007677"', prompt)
-        self.assertIn("...", prompt)
-        self.assertLess(len(prompt), 3500)
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(service.llm.generate_json.call_count, 2)
+
+    def test_generate_answer_retries_after_invalid_schema(self):
+        service = object.__new__(QueryService)
+        service.llm = Mock()
+        service.llm.generate_json.side_effect = [
+            {"status": "accepted", "answer": {"programs": []}, "refusal_reason": None},
+            {"status": "answered", "answer": "Answer [23-24:000001].", "refusal_reason": None},
+        ]
+
+        result = service._generate_answer(
+            question="What do I have left?",
+            retrieved_chunks=[{"chunkId": "23-24:000001", "bulletin": "23-24", "chunk": "Program Profile"}],
+            student=None,
+            planning_context=None,
+        )
+
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(service.llm.generate_json.call_count, 2)
 
 
 class LLMClientTests(unittest.TestCase):

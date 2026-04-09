@@ -9,18 +9,20 @@ from services.llm_client import LLMError, OllamaClient
 from services.planning_service import build_planning_context
 from services.profile_service import get_student_payload
 from services.retrieval_service import DEFAULT_QUERY_SOURCE_TYPES, get_retrieval_service
-from services.verification import extract_citation_ids, split_sentences, verify_answer
+from services.verification import (
+    PLANNING_CONTEXT_CITATION_ID,
+    extract_citation_ids,
+    planning_context_text,
+    split_sentences,
+    strip_citations,
+    verify_answer,
+)
 from services.year_utils import expand_bulletin_year
 
 
 DEFAULT_REFUSAL = (
     "I can only answer from the retrieved bulletin evidence, and the current "
     "evidence is not sufficient to answer this safely."
-)
-PROMPT_CHUNK_CHAR_LIMIT = int(os.getenv("LLM_PROMPT_CHUNK_CHAR_LIMIT", "600"))
-PROMPT_TOTAL_CHARS = int(os.getenv("LLM_PROMPT_TOTAL_CHARS", "2400"))
-PROMPT_PROGRAM_PROFILE_CHAR_LIMIT = int(
-    os.getenv("LLM_PROMPT_PROGRAM_PROFILE_CHAR_LIMIT", "8000")
 )
 LOG_PATH = Path(
     os.getenv(
@@ -91,10 +93,11 @@ class QueryService:
         *,
         question: str,
         student_id: str | None = None,
-        top_k: int = 5,
+        top_k: int = 1,
     ) -> dict:
         started_at = time.perf_counter()
         timings_ms: dict[str, int] = {}
+        effective_top_k = 1
 
         student = get_student_payload(student_id) if student_id else None
         bulletin_year = student.get("bulletin_year") if student else None
@@ -104,7 +107,7 @@ class QueryService:
         retrieval_started = time.perf_counter()
         retrieved_chunks = self.retrieval.hybrid_search(
             question,
-            k=top_k,
+            k=effective_top_k,
             bulletin_year=bulletin_year,
             program=program,
             source_types=DEFAULT_QUERY_SOURCE_TYPES,
@@ -219,13 +222,18 @@ class QueryService:
             "You are AdvisorAI. Use only the retrieved bulletin summary chunks provided by the user. "
             "Do not use outside knowledge. If the evidence is insufficient, refuse. "
             "Return strict JSON with keys status, answer, refusal_reason. "
-            "Keep answers brief: at most 2 sentences unless the question is a degree-audit question. "
+            "Keep answers brief: at most 5 sentences unless the question is a degree-audit question. "
             "When structured planning context is provided, treat it as the source of truth for the "
             "student's completed, in-progress, and planned courses. "
             "Never rely on unseen raw bulletin chunks; the summary chunks are the only bulletin evidence "
             "available to you in this prompt. "
-            "If status is answered, every sentence in answer must end with one or more chunk citations "
-            "formatted like [23-24:007646] or [23-24:007646, 23-24:007652]. "
+            "The answer field must always be a plain JSON string, never an object or array. "
+            "Valid status values are only answered or refused. "
+            "If status is answered, every sentence in answer must end with one or more citations "
+            "formatted like [23-24:007646], [23-24:007646, 23-24:007652], or [planning_context]. "
+            "Use [planning_context] only for facts taken from the student's saved course history or "
+            "planning data. Use bulletin chunk citations only for bulletin requirements or policy claims. "
+            "Keep planning-context facts and bulletin-requirement facts in separate sentences whenever possible. "
             "If multiple bulletin years are cited, explicitly name the year in the answer text. "
             "Do not mention chunks that were not provided."
         )
@@ -237,29 +245,59 @@ class QueryService:
             rewrite_feedback=rewrite_feedback,
             prior_answer=prior_answer,
         )
-        result = self.llm.generate_json(system_prompt=system_prompt, prompt=prompt)
-        status = str(result.get("status") or "").strip().lower()
-        answer = str(result.get("answer") or "").strip()
-        refusal_reason = str(result.get("refusal_reason") or "").strip() or None
+        retry_prompt = (
+            prompt
+            + "\nYour previous response was invalid. Return exactly one compact JSON object with "
+              "keys status, answer, refusal_reason. Use only status=answered or status=refused. "
+              "The answer value must be a plain JSON string."
+        )
+        last_error: LLMError | None = None
 
-        if status not in {"answered", "refused"}:
-            if answer:
-                status = "answered"
-            else:
-                status = "refused"
+        for attempt, active_prompt in enumerate((prompt, retry_prompt)):
+            try:
+                result = self.llm.generate_json(system_prompt=system_prompt, prompt=active_prompt)
+            except LLMError as exc:
+                last_error = exc
+                if attempt == 0 and "invalid JSON" in str(exc):
+                    continue
+                raise
 
-        if status == "refused":
+            status_raw = result.get("status")
+            answer_raw = result.get("answer")
+            refusal_raw = result.get("refusal_reason")
+
+            status = str(status_raw or "").strip().lower()
+            answer = answer_raw.strip() if isinstance(answer_raw, str) else None
+            refusal_reason = refusal_raw.strip() if isinstance(refusal_raw, str) else None
+
+            schema_valid = (
+                status in {"answered", "refused"}
+                and (answer_raw is None or isinstance(answer_raw, str))
+                and (refusal_raw is None or isinstance(refusal_raw, str))
+            )
+            if not schema_valid:
+                last_error = LLMError(
+                    "LLM returned invalid response schema: "
+                    + json.dumps(result, ensure_ascii=True)[:1000]
+                )
+                if attempt == 0:
+                    continue
+                raise last_error
+
+            if status == "refused":
+                return {
+                    "status": "refused",
+                    "answer": "",
+                    "refusal_reason": refusal_reason or DEFAULT_REFUSAL,
+                }
+
             return {
-                "status": "refused",
-                "answer": "",
-                "refusal_reason": refusal_reason or DEFAULT_REFUSAL,
+                "status": "answered",
+                "answer": answer or "",
+                "refusal_reason": None,
             }
 
-        return {
-            "status": "answered",
-            "answer": answer,
-            "refusal_reason": None,
-        }
+        raise last_error or LLMError("LLM generation failed.")
 
     def _verify_or_rewrite(
         self,
@@ -277,20 +315,32 @@ class QueryService:
                 "verifier": {"passed": False, "issues": [initial_result.get("refusal_reason")]},
             }
 
-        verifier = verify_answer(initial_result["answer"], retrieved_chunks)
+        normalized_initial_answer = self._normalize_answer(initial_result["answer"])
+        verifier = verify_answer(
+            normalized_initial_answer,
+            retrieved_chunks,
+            planning_context=planning_context,
+        )
         if verifier["passed"]:
             return {
                 "status": "answered",
-                "answer": initial_result["answer"],
+                "answer": normalized_initial_answer,
                 "verifier": verifier,
             }
 
-        repaired_answer = self._repair_answer_citations(
-            initial_result["answer"],
-            retrieved_chunks,
+        repaired_answer = self._normalize_answer(
+            self._repair_answer_citations(
+                normalized_initial_answer,
+                retrieved_chunks,
+                planning_context,
+            )
         )
-        if repaired_answer != initial_result["answer"]:
-            repaired_verifier = verify_answer(repaired_answer, retrieved_chunks)
+        if repaired_answer != normalized_initial_answer:
+            repaired_verifier = verify_answer(
+                repaired_answer,
+                retrieved_chunks,
+                planning_context=planning_context,
+            )
             if repaired_verifier["passed"]:
                 return {
                     "status": "answered",
@@ -304,7 +354,7 @@ class QueryService:
             student=student,
             planning_context=planning_context,
             rewrite_feedback=verifier["issues"],
-            prior_answer=initial_result["answer"],
+            prior_answer=normalized_initial_answer,
         )
         if rewrite["status"] != "answered":
             return {
@@ -313,38 +363,77 @@ class QueryService:
                 "verifier": verifier,
             }
 
-        rewritten_verifier = verify_answer(rewrite["answer"], retrieved_chunks)
+        rewritten_answer = self._normalize_answer(rewrite["answer"])
+        rewritten_verifier = verify_answer(
+            rewritten_answer,
+            retrieved_chunks,
+            planning_context=planning_context,
+        )
         if rewritten_verifier["passed"]:
             return {
                 "status": "answered",
-                "answer": rewrite["answer"],
+                "answer": rewritten_answer,
                 "verifier": rewritten_verifier,
             }
 
         return {
             "status": "refused",
-            "refusal_reason": DEFAULT_REFUSAL,
+            "refusal_reason": rewritten_verifier["issues"][0] if rewritten_verifier["issues"] else DEFAULT_REFUSAL,
             "verifier": rewritten_verifier,
         }
 
-    def _repair_answer_citations(self, answer: str, retrieved_chunks: list[dict]) -> str:
+    def _normalize_answer(self, answer: str) -> str:
+        sentences = split_sentences(answer)
+        if not sentences:
+            return ""
+
+        cleaned_sentences: list[str] = []
+        seen: set[str] = set()
+        for sentence in sentences:
+            normalized = re.sub(r"\s+", " ", sentence.strip())
+            if not normalized or not strip_citations(normalized):
+                continue
+            if normalized in seen:
+                continue
+            cleaned_sentences.append(normalized)
+            seen.add(normalized)
+
+        return " ".join(cleaned_sentences)
+
+    def _repair_answer_citations(
+        self,
+        answer: str,
+        retrieved_chunks: list[dict],
+        planning_context: dict | None,
+    ) -> str:
         sentences = split_sentences(answer)
         if not sentences:
             return answer
 
+        retrieved_ids = {chunk["chunkId"] for chunk in retrieved_chunks}
         repaired_sentences: list[str] = []
         changed = False
         for sentence in sentences:
-            if extract_citation_ids(sentence):
+            existing_ids = extract_citation_ids(sentence)
+            invalid_existing_ids = [
+                citation_id
+                for citation_id in existing_ids
+                if citation_id not in retrieved_ids and citation_id != PLANNING_CONTEXT_CITATION_ID
+            ]
+            citation_ids = self._find_supporting_citation_ids(
+                sentence,
+                retrieved_chunks,
+                planning_context,
+            )
+            if not citation_ids:
                 repaired_sentences.append(sentence)
                 continue
-
-            citation_ids = self._find_supporting_chunk_ids(sentence, retrieved_chunks)
-            if not citation_ids:
+            if existing_ids and not invalid_existing_ids:
                 repaired_sentences.append(sentence)
                 continue
 
             body = re.sub(r"\s+", " ", sentence.strip())
+            body = re.sub(r"\[[^\]]+\]", "", body).strip()
             match = re.match(r"^(.*?)([.!?]+)?$", body)
             sentence_body = (match.group(1) or "").strip() if match else body
             punctuation = match.group(2) or ""
@@ -358,7 +447,12 @@ class QueryService:
 
         return " ".join(repaired_sentences)
 
-    def _find_supporting_chunk_ids(self, sentence: str, retrieved_chunks: list[dict]) -> list[str]:
+    def _find_supporting_citation_ids(
+        self,
+        sentence: str,
+        retrieved_chunks: list[dict],
+        planning_context: dict | None,
+    ) -> list[str]:
         body = re.sub(r"\[[^\]]+\]", "", sentence)
         body_tokens = {
             token
@@ -368,20 +462,34 @@ class QueryService:
         if not body_tokens:
             return []
 
-        scored: list[tuple[int, float, str]] = []
+        scored: list[tuple[int, int, float, str]] = []
+        planning_tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]+", planning_context_text(planning_context).lower())
+            if len(token) > 2
+        }
+        planning_overlap = sum(1 for token in body_tokens if token in planning_tokens)
+        if planning_overlap > 0:
+            scored.append((planning_overlap, 1, 0.0, PLANNING_CONTEXT_CITATION_ID))
+
         for chunk in retrieved_chunks:
             chunk_text = chunk.get("chunk", "").lower()
             overlap = sum(1 for token in body_tokens if token in chunk_text)
             if overlap <= 0:
                 continue
-            scored.append((overlap, float(chunk.get("score") or 0.0), chunk["chunkId"]))
+            scored.append((overlap, 0, float(chunk.get("score") or 0.0), chunk["chunkId"]))
 
         scored.sort(reverse=True)
         if not scored:
             return []
 
         best_overlap = scored[0][0]
-        return [chunk_id for overlap, _, chunk_id in scored if overlap == best_overlap][:2]
+        best_priority = scored[0][1]
+        return [
+            chunk_id
+            for overlap, priority, _, chunk_id in scored
+            if overlap == best_overlap and priority == best_priority
+        ][:1]
 
     def _compact_planning_context(self, planning_context: dict | None) -> dict | None:
         if not planning_context:
@@ -414,27 +522,14 @@ class QueryService:
         }
 
     def _prompt_ready_chunks(self, retrieved_chunks: list[dict]) -> list[dict]:
-        budget_remaining = PROMPT_TOTAL_CHARS
         prompt_chunks: list[dict] = []
         for chunk in retrieved_chunks:
-            if budget_remaining <= 0:
-                break
-
             structured = chunk.get("structuredData")
             structured_kind = structured.get("kind") if isinstance(structured, dict) else None
-            if structured_kind == "program_profile":
-                chunk_text = json.dumps(structured.get("program") or {}, ensure_ascii=True)
-                char_limit = min(PROMPT_PROGRAM_PROFILE_CHAR_LIMIT, budget_remaining)
-            else:
-                chunk_text = re.sub(r"\s+", " ", chunk.get("chunk", "")).strip()
-                char_limit = min(PROMPT_CHUNK_CHAR_LIMIT, budget_remaining)
+            chunk_text = chunk.get("chunk", "").strip()
 
-            truncated = chunk_text[:char_limit].strip()
-            if not truncated:
+            if not chunk_text:
                 continue
-
-            if len(chunk_text) > len(truncated):
-                truncated = truncated.rstrip() + " ..."
 
             prompt_chunks.append(
                 {
@@ -448,10 +543,9 @@ class QueryService:
                     "sectionType": chunk.get("sectionType"),
                     "sourceChunkIds": (chunk.get("sourceChunkIds") or [])[:8],
                     "structuredDataKind": structured_kind,
-                    "text": truncated,
+                    "text": chunk_text,
                 }
             )
-            budget_remaining -= len(truncated)
 
         return prompt_chunks
 

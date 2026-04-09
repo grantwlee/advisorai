@@ -405,7 +405,7 @@ def query():
     if not question:
         return jsonify({"error": "question is required"}), 400
 
-    top_k = int(data.get("top_k") or 5)
+    top_k = int(data.get("top_k") or 1)
     student_id = data.get("student_id")
     if student_id and not get_student(student_id):
         return jsonify({"error": "Student not found"}), 404

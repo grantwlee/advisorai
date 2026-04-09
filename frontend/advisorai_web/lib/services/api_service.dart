@@ -142,7 +142,7 @@ class ApiService {
   Future<Map<String, dynamic>> queryAdvisor({
     required String question,
     String? studentId,
-    int topK = 5,
+    int topK = 1,
   }) async {
     return await post('/api/query', {
       'question': question,

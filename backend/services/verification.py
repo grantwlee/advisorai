@@ -2,6 +2,7 @@ import re
 
 
 CITATION_PATTERN = re.compile(r"\[([^\[\]]+)\]")
+PLANNING_CONTEXT_CITATION_ID = "planning_context"
 STOPWORDS = {
     "a",
     "an",
@@ -69,14 +70,59 @@ def explicit_year_mentions(answer: str) -> set[str]:
     return found
 
 
-def verify_answer(answer: str, retrieved_chunks: list[dict]) -> dict:
+def planning_context_text(planning_context: dict | None) -> str:
+    if not planning_context:
+        return ""
+
+    completed_codes = planning_context.get("completed_course_codes", [])
+    in_progress_codes = planning_context.get("in_progress_course_codes", [])
+    planned_codes = planning_context.get("planned_course_codes", [])
+
+    parts = [
+        f"program {planning_context.get('program', '')}",
+        f"bulletin year {planning_context.get('bulletin_year', '')}",
+        f"completed course count {len(completed_codes)}",
+        f"in progress course count {len(in_progress_codes)}",
+        f"planned course count {len(planned_codes)}",
+        f"completed credits {planning_context.get('completed_credits', '')}",
+        f"in progress credits {planning_context.get('in_progress_credits', '')}",
+        f"planned credits {planning_context.get('planned_credits', '')}",
+    ]
+    if completed_codes:
+        parts.append("completed courses " + " ".join(completed_codes))
+    if in_progress_codes:
+        parts.append("in progress courses " + " ".join(in_progress_codes))
+    if planned_codes:
+        parts.append("planned courses " + " ".join(planned_codes))
+
+    for row in planning_context.get("in_progress_courses", []):
+        parts.append(
+            "in progress course "
+            f"{row.get('code', '')} {row.get('title', '')} {row.get('credits', '')}"
+        )
+    for row in planning_context.get("planned_courses", []):
+        parts.append(
+            "planned course "
+            f"{row.get('code', '')} {row.get('title', '')} {row.get('credits', '')}"
+        )
+
+    return "\n".join(part for part in parts if part.strip())
+
+
+def verify_answer(
+    answer: str,
+    retrieved_chunks: list[dict],
+    planning_context: dict | None = None,
+) -> dict:
     retrieved_by_id = {chunk["chunkId"]: chunk for chunk in retrieved_chunks}
+    planning_tokens = tokenize(planning_context_text(planning_context))
     sentences = split_sentences(answer)
     issues: list[str] = []
     sentence_results: list[dict] = []
 
     for sentence in sentences:
         citation_ids = extract_citation_ids(sentence)
+        sentence_body = strip_citations(sentence)
         result = {
             "sentence": sentence,
             "citations": citation_ids,
@@ -88,7 +134,14 @@ def verify_answer(answer: str, retrieved_chunks: list[dict]) -> dict:
             sentence_results.append(result)
             continue
 
-        missing_ids = [chunk_id for chunk_id in citation_ids if chunk_id not in retrieved_by_id]
+        missing_ids = [
+            chunk_id
+            for chunk_id in citation_ids
+            if chunk_id not in retrieved_by_id
+            and not (
+                chunk_id == PLANNING_CONTEXT_CITATION_ID and planning_context is not None
+            )
+        ]
         if missing_ids:
             issues.append(
                 f"Sentence cites chunks that were not retrieved: {', '.join(missing_ids)}"
@@ -96,10 +149,18 @@ def verify_answer(answer: str, retrieved_chunks: list[dict]) -> dict:
             sentence_results.append(result)
             continue
 
-        body_tokens = tokenize(strip_citations(sentence))
-        cited_chunks = [retrieved_by_id[chunk_id] for chunk_id in citation_ids]
+        if not sentence_body:
+            issues.append(f"Sentence contains only citations: {sentence}")
+            sentence_results.append(result)
+            continue
+
+        body_tokens = tokenize(sentence_body)
         cited_tokens = set()
-        for chunk in cited_chunks:
+        for chunk_id in citation_ids:
+            if chunk_id == PLANNING_CONTEXT_CITATION_ID:
+                cited_tokens |= planning_tokens
+                continue
+            chunk = retrieved_by_id[chunk_id]
             cited_tokens |= tokenize(chunk.get("chunk", ""))
 
         overlap = body_tokens & cited_tokens
@@ -117,7 +178,7 @@ def verify_answer(answer: str, retrieved_chunks: list[dict]) -> dict:
     cited_years = {
         chunk["bulletin"]
         for chunk_id in extract_citation_ids(answer)
-        if (chunk := retrieved_by_id.get(chunk_id))
+        if chunk_id != PLANNING_CONTEXT_CITATION_ID and (chunk := retrieved_by_id.get(chunk_id))
     }
     expanded_cited_years = set()
     for year in cited_years:

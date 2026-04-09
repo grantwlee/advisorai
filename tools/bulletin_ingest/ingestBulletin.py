@@ -33,11 +33,6 @@ OUT_MANIFEST = os.path.join(OUT_DIR, "bulletin_chunks_manifest.json")
 OUT_FAISS = os.path.join(OUT_DIR, "bulletin_index.faiss")
 OUT_PROGRAMS_JSON = os.path.join(OUT_DIR, "bulletin_program_structures.json")
 
-# Header/footer removal:
-# remove anything in the top X% and bottom Y% of a page
-HEADER_CUT = 0.08   # top 8% of page height
-FOOTER_CUT = 0.08   # bottom 8% of page height
-
 # Embeddings
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
@@ -73,16 +68,11 @@ def guess_bulletin_label(pdf_filename: str) -> str:
     return os.path.splitext(base)[0]
 
 
-def extract_page_text_without_header_footer(doc: fitz.Document, page_index: int) -> str:
+def extract_page_text(doc: fitz.Document, page_index: int) -> str:
     """
-    Extract text blocks and filter out blocks that fall into header/footer bands.
-    Uses bounding boxes -> works better than raw text extraction for repeated headers/footers.
+    Extract text blocks in page order without trimming top or bottom page bands.
     """
     page = doc[page_index]
-    page_height = page.rect.height
-
-    header_y = page_height * HEADER_CUT
-    footer_y = page_height * (1.0 - FOOTER_CUT)
 
     blocks = page.get_text("blocks")  # (x0,y0,x1,y1,"text",block_no,block_type)
     kept: List[Tuple[float, float, float, float, str]] = []
@@ -90,12 +80,6 @@ def extract_page_text_without_header_footer(doc: fitz.Document, page_index: int)
     for b in blocks:
         x0, y0, x1, y1, text, *_ = b
         if not text or not text.strip():
-            continue
-
-        # Filter header/footer by block vertical position
-        if y1 <= header_y:
-            continue
-        if y0 >= footer_y:
             continue
 
         # also drop pure page numbers if they sneak in
@@ -188,8 +172,6 @@ def ingest_bulletins():
         "sourceDir": RAW_DIR,
         "outDir": OUT_DIR,
         "model": MODEL_NAME,
-        "headerCutPct": HEADER_CUT,
-        "footerCutPct": FOOTER_CUT,
         "chunkFormat": "program_profile",
         "bulletins": []
     }
@@ -200,7 +182,7 @@ def ingest_bulletins():
 
         pages = []
         for pno in range(doc.page_count):
-            text = extract_page_text_without_header_footer(doc, pno)
+            text = extract_page_text(doc, pno)
             pages.append({"pageNumber": pno + 1, "text": text})
 
         summary_rows = build_program_summary_rows(
@@ -267,7 +249,7 @@ def ingest_bulletins():
 
     # Build FAISS from the same program-summary rows written to bulletin_chunks.jsonl.
     if not all_vectors:
-        raise RuntimeError("No vectors produced. Check header/footer cuts or PDF extraction.")
+        raise RuntimeError("No vectors produced. Check PDF extraction.")
 
     mat = np.vstack(all_vectors).astype(np.float32)
     dim = mat.shape[1]
