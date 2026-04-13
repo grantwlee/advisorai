@@ -75,6 +75,7 @@ def planning_context_text(planning_context: dict | None) -> str:
         return ""
 
     completed_codes = planning_context.get("completed_course_codes", [])
+    completed_courses = planning_context.get("completed_courses", [])
     in_progress_codes = planning_context.get("in_progress_course_codes", [])
     planned_codes = planning_context.get("planned_course_codes", [])
 
@@ -90,6 +91,11 @@ def planning_context_text(planning_context: dict | None) -> str:
     ]
     if completed_codes:
         parts.append("completed courses " + " ".join(completed_codes))
+    for row in completed_courses:
+        parts.append(
+            "completed course "
+            f"{row.get('code', '')} {row.get('title', '')} {row.get('credits', '')}"
+        )
     if in_progress_codes:
         parts.append("in progress courses " + " ".join(in_progress_codes))
     if planned_codes:

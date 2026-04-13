@@ -6,7 +6,13 @@ import socket
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.planning_service import build_planning_context, is_planning_question
+from services.planning_service import (
+    build_deterministic_audit,
+    build_planning_context,
+    is_audit_question,
+    is_planning_question,
+    render_deterministic_audit_answer,
+)
 from services.query_service import QueryService, build_citation_payload
 from services.retrieval_service import DEFAULT_QUERY_SOURCE_TYPES, RetrievalService
 from services.llm_client import LLMError, OllamaClient
@@ -90,6 +96,10 @@ class PlanningServiceTests(unittest.TestCase):
     def test_is_planning_question_detects_next_semester_language(self):
         self.assertTrue(is_planning_question("What should I take next semester?"))
 
+    def test_is_audit_question_detects_remaining_requirement_language(self):
+        self.assertTrue(is_audit_question("What do I have left?"))
+        self.assertTrue(is_audit_question("What courses do I still need for my major?"))
+
     def test_build_planning_context_uses_saved_course_history(self):
         student = {
             "student_id": "S1001",
@@ -120,6 +130,7 @@ class PlanningServiceTests(unittest.TestCase):
 
         self.assertIsNotNone(context)
         self.assertEqual(context["completed_course_codes"], ["CPTR 151", "CPTR 152", "CPTR 230"])
+        self.assertEqual([row["code"] for row in context["completed_courses"]], ["CPTR 151", "CPTR 152", "CPTR 230"])
         self.assertEqual(context["in_progress_course_codes"], ["CPTR 276"])
         self.assertEqual([row["code"] for row in context["in_progress_courses"]], ["CPTR 276"])
         self.assertIn(
@@ -127,9 +138,114 @@ class PlanningServiceTests(unittest.TestCase):
             context["context_gaps"],
         )
         self.assertIn(
-            "No structured degree-audit rules are configured, so course recommendations must be inferred from retrieved bulletin evidence and the saved course history.",
+            "Deterministic audit is currently limited to structured program-profile requirements and saved course history; full university degree-audit rules are not yet configured.",
             context["context_gaps"],
         )
+
+    def test_build_deterministic_audit_extracts_remaining_requirements_from_program_profile(self):
+        planning_context = {
+            "program": "Computer Science",
+            "bulletin_year": "2023-2024",
+            "completed_course_codes": ["CPTR 151", "CPTR 152", "CPTR 230"],
+            "completed_courses": [
+                {"code": "CPTR 151", "title": "Computer Science I", "credits": 3},
+                {"code": "CPTR 152", "title": "Computer Science II", "credits": 3},
+                {"code": "CPTR 230", "title": "Data Science Fundamentals", "credits": 3},
+            ],
+            "in_progress_course_codes": ["CPTR 276"],
+            "planned_course_codes": [],
+            "in_progress_courses": [{"code": "CPTR 276", "title": "Data Structures and Algorithms", "credits": 3}],
+            "planned_courses": [],
+        }
+        retrieved_chunks = [
+            {
+                "chunkId": "23-24:000579",
+                "structuredData": {
+                    "program": {
+                        "program": "Computer Science BS",
+                        "sections": [
+                            {
+                                "section": "Core Courses",
+                                "type": "required_courses",
+                                "required_credits": "42",
+                                "courses": [
+                                    {"course": "CPTR 151", "title": "Computer Science I", "credits": "3"},
+                                    {"course": "CPTR 152", "title": "Computer Science II", "credits": "3"},
+                                    {"course": "CPTR 230", "title": "Data Science Fundamentals", "credits": "3"},
+                                    {"course": "CPTR 276", "title": "Data Structures and Algorithms", "credits": "3"},
+                                    {"course": "CPTR 425", "title": "Programming Languages", "credits": "3"},
+                                    {"course": "CPTR 430", "title": "Analysis of Algorithms", "credits": "3"},
+                                ],
+                            },
+                            {
+                                "section": "Choose Three Courses",
+                                "type": "choose_from_pool",
+                                "required_credits": "9",
+                                "options": [
+                                    {"course": "CPTR 251", "title": "Server Application Development", "credits": "3"},
+                                    {"course": "CPTR 252", "title": "Mobile Application Development", "credits": "3"},
+                                    {"course": "INFS 330", "title": "Introduction to Web Development", "credits": "3"},
+                                ],
+                            },
+                            {
+                                "section": "Cognates - Required",
+                                "type": "required_courses",
+                                "courses": [
+                                    {"course": "MATH 191", "title": "Calculus I", "credits": "4"},
+                                    {"course": "MATH 192", "title": "Calculus II", "credits": "4"},
+                                ],
+                            },
+                            {
+                                "section": "Cognates - Statistics Choose At Least One",
+                                "type": "choose_from_pool",
+                                "options": [
+                                    {"course": "STAT 285", "title": "Introduction to Applied Statistics", "credits": "3"},
+                                    {"course": "STAT 340", "title": "Probability Theory with Statistical Applications", "credits": "3"},
+                                ],
+                            },
+                            {
+                                "section": "Electives",
+                                "type": "choose_from_pool",
+                                "rules": [
+                                    "Choose 15 credits in consultation with academic advisor from CPTR courses, INFS",
+                                    "310, INFS 330, and INFS 436 that have not already been taken to satisfy the major",
+                                    "core requirements.",
+                                    "Up to 6 credits of the following courses may be substituted for CPTR elective",
+                                    "credits.",
+                                    "MATH 240, 286, 426",
+                                    "STAT 340",
+                                    "ENGR 225, 275, 310, 415",
+                                ],
+                            },
+                        ],
+                        "other_requirements": [
+                            "No grade lower than C- may be counted toward major or cognate requirements.",
+                            "Students must fulfill all Bachelor's Degree requirements listed in the Andrews Core Experience.",
+                        ],
+                    }
+                },
+            }
+        ]
+
+        audit = build_deterministic_audit(
+            planning_context=planning_context,
+            retrieved_chunks=retrieved_chunks,
+        )
+
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit["citation_chunk_id"], "23-24:000579")
+        rendered = render_deterministic_audit_answer(audit)
+        self.assertIn("You have completed CPTR 151, CPTR 152, and CPTR 230 [planning_context].", rendered)
+        self.assertIn("You are currently taking CPTR 276 [planning_context].", rendered)
+        self.assertIn("CPTR 425 and CPTR 430", rendered)
+        self.assertIn("You still need three courses from Choose Three Courses", rendered)
+        self.assertIn("MATH 191 and MATH 192", rendered)
+        self.assertIn("one statistics cognate", rendered)
+        self.assertIn(
+            "Up to 6 of those elective credits may instead come from MATH 240, MATH 286, MATH 426, STAT 340, ENGR 225, ENGR 275, ENGR 310, and ENGR 415",
+            rendered,
+        )
+        self.assertIn("Andrews Core Experience", rendered)
 
 
 class QueryServiceTests(unittest.TestCase):
@@ -248,6 +364,74 @@ class QueryServiceTests(unittest.TestCase):
             response["retrieved_chunks"][0]["pdfPageLinks"][1]["url"],
             "/api/bulletins/pdf/Bulletin_23-24.pdf#page=480",
         )
+
+    @patch("services.query_service.get_student_payload")
+    def test_answer_question_uses_deterministic_audit_for_audit_questions(self, mock_get_student_payload):
+        service = object.__new__(QueryService)
+        service.retrieval = Mock()
+        service.llm = Mock()
+        service._log_event = Mock()
+
+        mock_get_student_payload.return_value = {
+            "student_id": "S1001",
+            "name": "Alex Johnson",
+            "program": "Computer Science",
+            "bulletin_year": "2023-2024",
+            "courses": [
+                {"status": "completed", "course": {"code": "CPTR 151", "title": "Computer Science I", "credits": 3}},
+                {"status": "completed", "course": {"code": "CPTR 152", "title": "Computer Science II", "credits": 3}},
+                {"status": "completed", "course": {"code": "CPTR 230", "title": "Data Science Fundamentals", "credits": 3}},
+                {"status": "in_progress", "course": {"code": "CPTR 276", "title": "Data Structures and Algorithms", "credits": 3}},
+            ],
+        }
+        service.retrieval.hybrid_search.return_value = [
+            {
+                "chunkId": "23-24:000579",
+                "bulletin": "23-24",
+                "pageOccurrence": [479],
+                "sourcePageOccurrence": [479],
+                "sourceChunkIds": [],
+                "preview": "Program Profile: Computer Science BS",
+                "chunk": "Program Profile: Computer Science BS\nCore Courses: CPTR 151, CPTR 152, CPTR 230, CPTR 276, CPTR 425",
+                "sourcePdf": "Bulletin_23-24.pdf",
+                "sourceType": "program_summary",
+                "program": "Computer Science BS",
+                "sectionTitle": "Computer Science BS",
+                "sectionType": "program_profile",
+                "score": 5.0,
+                "structuredData": {
+                    "program": {
+                        "program": "Computer Science BS",
+                        "sections": [
+                            {
+                                "section": "Core Courses",
+                                "type": "required_courses",
+                                "courses": [
+                                    {"course": "CPTR 151", "title": "Computer Science I", "credits": "3"},
+                                    {"course": "CPTR 152", "title": "Computer Science II", "credits": "3"},
+                                    {"course": "CPTR 230", "title": "Data Science Fundamentals", "credits": "3"},
+                                    {"course": "CPTR 276", "title": "Data Structures and Algorithms", "credits": "3"},
+                                    {"course": "CPTR 425", "title": "Programming Languages", "credits": "3"},
+                                ],
+                            }
+                        ],
+                        "other_requirements": [],
+                    }
+                },
+            }
+        ]
+
+        response = service.answer_question(
+            question="What do I have left?",
+            student_id="S1001",
+        )
+
+        self.assertEqual(response["status"], "answered")
+        self.assertIn("CPTR 425", response["answer"])
+        self.assertIn("[planning_context]", response["answer"])
+        self.assertEqual(response["timings_ms"]["generation"], 0)
+        self.assertIsNotNone(response["audit_summary"])
+        service.llm.generate_json.assert_not_called()
 
     def test_repair_answer_citations_adds_supporting_chunk_id(self):
         service = object.__new__(QueryService)

@@ -8,7 +8,12 @@ from pathlib import Path
 
 from services.chunk_serialization import serialize_chunk_reference
 from services.llm_client import LLMError, OllamaClient
-from services.planning_service import build_planning_context
+from services.planning_service import (
+    build_deterministic_audit,
+    build_planning_context,
+    is_audit_question,
+    render_deterministic_audit_answer,
+)
 from services.profile_service import get_student_payload
 from services.retrieval_service import DEFAULT_QUERY_SOURCE_TYPES, get_retrieval_service
 from services.verification import (
@@ -98,6 +103,42 @@ class QueryService:
             self._log_event(response, question=question, student=student)
             return response
 
+        deterministic_audit = None
+        if is_audit_question(question):
+            deterministic_audit = build_deterministic_audit(
+                planning_context=planning_context,
+                retrieved_chunks=retrieved_chunks,
+            )
+        if deterministic_audit is not None:
+            verification_started = time.perf_counter()
+            deterministic_answer = render_deterministic_audit_answer(deterministic_audit).strip()
+            verifier = verify_answer(
+                deterministic_answer,
+                retrieved_chunks,
+                planning_context=planning_context,
+            )
+            timings_ms["generation"] = 0
+            timings_ms["verification"] = round((time.perf_counter() - verification_started) * 1000)
+            timings_ms["total"] = round((time.perf_counter() - started_at) * 1000)
+
+            if verifier["passed"]:
+                response = {
+                    "status": "answered",
+                    "answer": deterministic_answer,
+                    "refusal_reason": None,
+                    "citations": build_citation_payload(deterministic_answer, retrieved_chunks),
+                    "retrieved_chunks": serialize_retrieved_chunks(retrieved_chunks),
+                    "verifier": verifier,
+                    "timings_ms": timings_ms,
+                    "student_context": self._student_context(student),
+                    "audit_summary": deterministic_audit,
+                    "planning_context": self._serialize_planning_context(planning_context),
+                }
+                if include_prompt_debug:
+                    response["prompt_debug"] = {"attempts": prompt_debug_attempts}
+                self._log_event(response, question=question, student=student)
+                return response
+
         generation_started = time.perf_counter()
         try:
             llm_result = self._generate_answer(
@@ -179,7 +220,7 @@ class QueryService:
             "verifier": verified["verifier"],
             "timings_ms": timings_ms,
             "student_context": self._student_context(student),
-            "audit_summary": None,
+            "audit_summary": deterministic_audit,
             "planning_context": self._serialize_planning_context(planning_context),
         }
         if include_prompt_debug:
@@ -516,6 +557,10 @@ class QueryService:
             "program": planning_context["program"],
             "bulletin_year": planning_context["bulletin_year"],
             "completed_course_codes": planning_context.get("completed_course_codes", [])[:12],
+            "completed_courses": compact_courses(
+                planning_context.get("completed_courses", []),
+                6,
+            ),
             "in_progress_course_codes": planning_context.get("in_progress_course_codes", [])[:8],
             "planned_course_codes": planning_context.get("planned_course_codes", [])[:8],
             "in_progress_courses": compact_courses(
@@ -662,6 +707,7 @@ class QueryService:
             "program": planning_context["program"],
             "bulletin_year": planning_context["bulletin_year"],
             "completed_course_codes": planning_context.get("completed_course_codes", []),
+            "completed_courses": planning_context.get("completed_courses", []),
             "in_progress_course_codes": planning_context.get("in_progress_course_codes", []),
             "planned_course_codes": planning_context.get("planned_course_codes", []),
             "completed_credits": planning_context.get("completed_credits"),
