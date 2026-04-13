@@ -60,6 +60,7 @@ def serialize_chunk_reference(row: dict, *, include_score: bool = False) -> dict
         "sourcePageOccurrence": row.get("sourcePageOccurrence") or [],
         "sourceChunkIds": row.get("sourceChunkIds") or [],
         "preview": row["preview"],
+        "chunk": row.get("chunk"),
         "sourcePdf": row.get("sourcePdf"),
         "sourceType": row.get("sourceType"),
         "program": row.get("program"),

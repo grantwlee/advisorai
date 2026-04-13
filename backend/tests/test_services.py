@@ -170,6 +170,10 @@ class QueryServiceTests(unittest.TestCase):
                 },
             ],
         )
+        self.assertEqual(
+            citations[0]["chunk"],
+            "Program Summary: Computer Science BS\nTotal Credits - 120",
+        )
 
     @patch("services.query_service.get_student_payload")
     def test_answer_question_retrieves_summary_chunks_only(self, mock_get_student_payload):
@@ -232,6 +236,10 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(response["status"], "answered")
         self.assertEqual(response["student_context"]["student_id"], "S1001")
         self.assertEqual(response["citations"][0]["sourceType"], "program_summary")
+        self.assertEqual(
+            response["citations"][0]["chunk"],
+            "Program Summary: Computer Science BS\nTotal Credits - 120",
+        )
         self.assertEqual(
             response["citations"][0]["pdfPageUrl"],
             "/api/bulletins/pdf/Bulletin_23-24.pdf#page=479",

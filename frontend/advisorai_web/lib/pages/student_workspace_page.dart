@@ -234,7 +234,8 @@ class _StudentWorkspacePageState extends State<StudentWorkspacePage> {
                           else
                             ..._history.map((exchange) => Padding(
                                   padding: const EdgeInsets.only(bottom: 16),
-                                  child: _AdvisorExchangeCard(exchange: exchange),
+                                  child:
+                                      _AdvisorExchangeCard(exchange: exchange),
                                 )),
                         ],
                       ),
@@ -288,9 +289,10 @@ class _StudentSummaryCard extends StatelessWidget {
                     width: double.infinity,
                     child: Text(
                       name,
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                      style:
+                          Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
                     ),
                   ),
                   _InfoChip(
@@ -512,12 +514,13 @@ class _AdvisorQueryCard extends StatelessWidget {
                       ),
                       _SuggestionChip(
                         label: 'Which bulletin year applies to me?',
-                        onTap: () =>
-                            controller.text = 'Which bulletin year applies to me?',
+                        onTap: () => controller.text =
+                            'Which bulletin year applies to me?',
                       ),
                       _SuggestionChip(
                         label: 'What does INFS 428 cover?',
-                        onTap: () => controller.text = 'What does INFS 428 cover?',
+                        onTap: () =>
+                            controller.text = 'What does INFS 428 cover?',
                       ),
                       _SuggestionChip(
                         label: 'What should I take next semester?',
@@ -569,14 +572,13 @@ class _AdvisorExchangeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final response = exchange.response;
     final status = response?['status']?.toString();
-    final citations =
-        (response?['citations'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+    final citations = (response?['citations'] as List<dynamic>? ?? [])
+        .cast<Map<String, dynamic>>();
     final retrieved = (response?['retrieved_chunks'] as List<dynamic>? ?? [])
         .cast<Map<String, dynamic>>();
-    final verifier =
-        (response?['verifier'] as Map<String, dynamic>? ?? const <String, dynamic>{});
-    final auditSummary =
-        response?['audit_summary'] as Map<String, dynamic>?;
+    final verifier = (response?['verifier'] as Map<String, dynamic>? ??
+        const <String, dynamic>{});
+    final auditSummary = response?['audit_summary'] as Map<String, dynamic>?;
     final planningContext =
         response?['planning_context'] as Map<String, dynamic>?;
 
@@ -620,7 +622,8 @@ class _AdvisorExchangeCard extends StatelessWidget {
               ],
             ] else ...[
               Text(
-                response['refusal_reason']?.toString() ?? 'The assistant refused to answer.',
+                response['refusal_reason']?.toString() ??
+                    'The assistant refused to answer.',
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
               const SizedBox(height: 12),
@@ -648,8 +651,8 @@ class _AuditSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final remaining =
-        (auditSummary['remaining'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+    final remaining = (auditSummary['remaining'] as List<dynamic>? ?? [])
+        .cast<Map<String, dynamic>>();
     final inProgress = (auditSummary['in_progress'] as List<dynamic>? ?? [])
         .cast<Map<String, dynamic>>();
 
@@ -689,15 +692,13 @@ class _PlanningContextCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final recommended = (planningContext['recommended_next_courses']
-                as List<dynamic>? ??
-            [])
-        .cast<Map<String, dynamic>>();
-    final blocked =
-        (planningContext['blocked_courses'] as List<dynamic>? ?? [])
+    final recommended =
+        (planningContext['recommended_next_courses'] as List<dynamic>? ?? [])
             .cast<Map<String, dynamic>>();
-    final gaps =
-        (planningContext['context_gaps'] as List<dynamic>? ?? []).cast<dynamic>();
+    final blocked = (planningContext['blocked_courses'] as List<dynamic>? ?? [])
+        .cast<Map<String, dynamic>>();
+    final gaps = (planningContext['context_gaps'] as List<dynamic>? ?? [])
+        .cast<dynamic>();
 
     return Container(
       width: double.infinity,
@@ -803,7 +804,11 @@ class _CitationCard extends StatelessWidget {
             ),
             _PdfLinkSection(data: citation),
             const SizedBox(height: 6),
-            Text(citation['preview']?.toString() ?? ''),
+            SelectableText(
+              citation['chunk']?.toString() ??
+                  citation['preview']?.toString() ??
+                  '',
+            ),
           ],
         ),
       ),
@@ -843,8 +848,8 @@ class _PdfLinkSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final sourcePdf = data['sourcePdf']?.toString();
     final pdfUrl = data['pdfUrl']?.toString();
-    final pageLinks =
-        (data['pdfPageLinks'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+    final pageLinks = (data['pdfPageLinks'] as List<dynamic>? ?? [])
+        .cast<Map<String, dynamic>>();
     final pages = (data['sourcePageOccurrence'] as List<dynamic>? ??
             data['pageOccurrence'] as List<dynamic>? ??
             [])
@@ -1039,10 +1044,13 @@ class _AddCourseDialogState extends State<_AddCourseDialog> {
                   initialValue: _status,
                   decoration: const InputDecoration(labelText: 'Status'),
                   items: const [
-                    DropdownMenuItem(value: 'completed', child: Text('Completed')),
-                    DropdownMenuItem(value: 'in_progress', child: Text('In progress')),
+                    DropdownMenuItem(
+                        value: 'completed', child: Text('Completed')),
+                    DropdownMenuItem(
+                        value: 'in_progress', child: Text('In progress')),
                     DropdownMenuItem(value: 'planned', child: Text('Planned')),
-                    DropdownMenuItem(value: 'transfer', child: Text('Transfer')),
+                    DropdownMenuItem(
+                        value: 'transfer', child: Text('Transfer')),
                     DropdownMenuItem(value: 'waived', child: Text('Waived')),
                   ],
                   onChanged: (value) {

@@ -186,10 +186,10 @@ class QueryService:
         prior_answer: str | None = None,
     ) -> dict:
         system_prompt = (
-            "You are AdvisorAI. Use only the retrieved bulletin summary chunks provided by the user. "
+            "You are AdvisorAI. Use only the retrieved bulletin summary chunks and student information provided by the user. "
             "Do not use outside knowledge. If the evidence is insufficient, refuse. "
             "Return strict JSON with keys status, answer, refusal_reason. "
-            "Keep answers brief: at most 5 sentences unless the question is a degree-audit question. "
+            "Explain why you think your answer is correct and explain how your answer fits into the context of the students plans"
             "When structured planning context is provided, treat it as the source of truth for the "
             "student's completed, in-progress, and planned courses. "
             "Never rely on unseen raw bulletin chunks; the summary chunks are the only bulletin evidence "
