@@ -81,6 +81,27 @@ class RetrievalService:
         token_hits = sum(1 for token in tokens if token in haystack)
         return token_hits >= min(2, len(tokens))
 
+    def _row_program_text(self, row: dict) -> str:
+        structured = row.get("structuredData")
+        structured_program = None
+        if isinstance(structured, dict):
+            program_payload = structured.get("program")
+            if isinstance(program_payload, dict):
+                structured_program = program_payload.get("program")
+
+        return "\n".join(
+            part
+            for part in (
+                row.get("program"),
+                row.get("sectionTitle"),
+                structured_program,
+            )
+            if isinstance(part, str) and part.strip()
+        )
+
+    def _row_matches_program(self, row: dict, program: str | None) -> bool:
+        return self._program_matches(self._row_program_text(row), program)
+
     def _normalize_source_types(
         self,
         source_types: Iterable[str] | None,
@@ -170,16 +191,7 @@ class RetrievalService:
                 continue
             if not self._source_type_matches(row, allowed_source_types):
                 continue
-            searchable_text = "\n".join(
-                part
-                for part in (
-                    row.get("program"),
-                    row.get("sectionTitle"),
-                    row.get("chunk"),
-                )
-                if part
-            )
-            if not self._program_matches(searchable_text, program):
+            if not self._row_matches_program(row, program):
                 continue
 
             results.append(self._metadata_to_result(row, semantic_score=float(score)))
@@ -200,7 +212,8 @@ class RetrievalService:
         clauses = [
             "to_tsvector('english', chunk_text) @@ plainto_tsquery('english', :q)"
         ]
-        params: dict[str, object] = {"q": query, "k": int(k)}
+        candidate_limit = max(int(k), 10) * (25 if program else 1)
+        params: dict[str, object] = {"q": query, "k": candidate_limit}
         target_year = normalize_bulletin_year(bulletin_year)
         allowed_source_types = self._normalize_source_types(source_types)
         if target_year:
@@ -210,13 +223,6 @@ class RetrievalService:
         if allowed_source_types:
             clauses.append("LOWER(COALESCE(source_type, 'program_summary')) = ANY(:source_types)")
             params["source_types"] = list(allowed_source_types)
-
-        if program:
-            clauses.append(
-                "(LOWER(COALESCE(program, '')) LIKE :program_pattern "
-                "OR LOWER(chunk_text) LIKE :program_pattern)"
-            )
-            params["program_pattern"] = f"%{program.lower()}%"
 
         sql = text(
             f"""
@@ -243,6 +249,8 @@ class RetrievalService:
             hash_key = row.get("chunk_hash")
             meta = self.metadata_by_hash.get(hash_key)
             if meta:
+                if not self._row_matches_program(meta, program):
+                    continue
                 results.append(
                     self._metadata_to_result(
                         meta,
@@ -250,11 +258,15 @@ class RetrievalService:
                         keyword_matched=True,
                     )
                 )
+                if len(results) >= k:
+                    break
                 continue
 
             bulletin = row.get("bulletin_year", "unknown")
             chunk_id = f"{bulletin}:{hash_key[:8] if hash_key else 'unknown'}"
             chunk_text = row.get("chunk_text") or ""
+            if program and not self._program_matches(chunk_text, program):
+                continue
             results.append(
                 {
                     "chunkId": chunk_id,
@@ -276,6 +288,8 @@ class RetrievalService:
                     "keywordMatched": True,
                 }
             )
+            if len(results) >= k:
+                break
 
         return results
 

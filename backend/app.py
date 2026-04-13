@@ -67,6 +67,14 @@ def resolve_retrieval_source_types(args) -> tuple[str, ...] | None:
     return DEFAULT_QUERY_SOURCE_TYPES
 
 
+def parse_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 @app.get("/api/bulletins/pdf/<path:filename>")
 def bulletin_pdf(filename):
     return send_from_directory(
@@ -414,6 +422,7 @@ def query():
 
     top_k = int(data.get("top_k") or 1)
     student_id = data.get("student_id")
+    include_prompt_debug = parse_bool(data.get("include_prompt_debug"))
     if student_id and not get_student(student_id):
         return jsonify({"error": "Student not found"}), 404
 
@@ -422,6 +431,7 @@ def query():
             question=question,
             student_id=student_id,
             top_k=top_k,
+            include_prompt_debug=include_prompt_debug,
         )
         return jsonify(response)
     except SQLAlchemyError as exc:

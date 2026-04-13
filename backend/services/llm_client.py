@@ -17,6 +17,26 @@ class OllamaClient:
         self.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "180"))
         self.context_window = int(os.getenv("LLM_CONTEXT_WINDOW", "4096"))
 
+    def build_generate_payload(
+        self,
+        *,
+        system_prompt: str,
+        prompt: str,
+        temperature: float = 0.1,
+    ) -> dict:
+        return {
+            "model": self.model,
+            "system": system_prompt,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": temperature,
+                "num_predict": self.max_tokens,
+                "num_ctx": self.context_window,
+            },
+        }
+
     def health(self) -> dict:
         request = urllib.request.Request(f"{self.base_url}/api/tags", method="GET")
         try:
@@ -35,20 +55,14 @@ class OllamaClient:
         system_prompt: str,
         prompt: str,
         temperature: float = 0.1,
+        payload: dict | None = None,
     ) -> dict:
-        payload = {
-            "model": self.model,
-            "system": system_prompt,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",
-            "options": {
-                "temperature": temperature,
-                "num_predict": self.max_tokens,
-                "num_ctx": self.context_window,
-            },
-        }
-        data = json.dumps(payload).encode("utf-8")
+        request_payload = payload or self.build_generate_payload(
+            system_prompt=system_prompt,
+            prompt=prompt,
+            temperature=temperature,
+        )
+        data = json.dumps(request_payload).encode("utf-8")
         request = urllib.request.Request(
             f"{self.base_url}/api/generate",
             data=data,

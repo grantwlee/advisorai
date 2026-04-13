@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.planning_service import build_planning_context, is_planning_question
 from services.query_service import QueryService, build_citation_payload
-from services.retrieval_service import DEFAULT_QUERY_SOURCE_TYPES
+from services.retrieval_service import DEFAULT_QUERY_SOURCE_TYPES, RetrievalService
 from services.llm_client import LLMError, OllamaClient
 from services.verification import extract_citation_ids, verify_answer
 
@@ -411,6 +411,20 @@ class QueryServiceTests(unittest.TestCase):
     def test_generate_answer_retries_after_invalid_json_error(self):
         service = object.__new__(QueryService)
         service.llm = Mock()
+        service.llm.build_generate_payload.side_effect = (
+            lambda *, system_prompt, prompt, temperature=0.1: {
+                "model": "test-model",
+                "system": system_prompt,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": 180,
+                    "num_ctx": 4096,
+                },
+            }
+        )
         service.llm.generate_json.side_effect = [
             LLMError("LLM returned invalid JSON: {bad"),
             {"status": "answered", "answer": "Answer [23-24:000001].", "refusal_reason": None},
@@ -429,6 +443,20 @@ class QueryServiceTests(unittest.TestCase):
     def test_generate_answer_retries_after_invalid_schema(self):
         service = object.__new__(QueryService)
         service.llm = Mock()
+        service.llm.build_generate_payload.side_effect = (
+            lambda *, system_prompt, prompt, temperature=0.1: {
+                "model": "test-model",
+                "system": system_prompt,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": 180,
+                    "num_ctx": 4096,
+                },
+            }
+        )
         service.llm.generate_json.side_effect = [
             {"status": "accepted", "answer": {"programs": []}, "refusal_reason": None},
             {"status": "answered", "answer": "Answer [23-24:000001].", "refusal_reason": None},
@@ -444,8 +472,213 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(result["status"], "answered")
         self.assertEqual(service.llm.generate_json.call_count, 2)
 
+    @patch("services.query_service.get_student_payload")
+    def test_answer_question_can_include_exact_prompt_debug_payload(self, mock_get_student_payload):
+        service = object.__new__(QueryService)
+        service.retrieval = Mock()
+        service.llm = Mock()
+        service.llm.build_generate_payload.side_effect = (
+            lambda *, system_prompt, prompt, temperature=0.1: {
+                "model": "test-model",
+                "system": system_prompt,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": 180,
+                    "num_ctx": 4096,
+                },
+            }
+        )
+        service.llm.generate_json.return_value = {
+            "status": "answered",
+            "answer": "Computer Science requires 120 credits [23-24:009001].",
+            "refusal_reason": None,
+        }
+        service._log_event = Mock()
+
+        mock_get_student_payload.return_value = {
+            "student_id": "S1001",
+            "name": "Alex Johnson",
+            "program": "Computer Science",
+            "bulletin_year": "2023-2024",
+            "courses": [],
+        }
+        service.retrieval.hybrid_search.return_value = [
+            {
+                "chunkId": "23-24:009001",
+                "bulletin": "23-24",
+                "pageOccurrence": [479],
+                "sourcePageOccurrence": [479],
+                "sourceChunkIds": ["23-24:007640"],
+                "preview": "Program Summary: Computer Science BS",
+                "chunk": "Program Summary: Computer Science BS\nTotal Credits - 120",
+                "sourcePdf": "Bulletin_23-24.pdf",
+                "sourceType": "program_summary",
+                "program": "Computer Science BS",
+                "sectionTitle": "Computer Science BS",
+                "score": 5.0,
+            }
+        ]
+
+        response = service.answer_question(
+            question="What do I have left?",
+            student_id="S1001",
+            include_prompt_debug=True,
+        )
+
+        self.assertIn("prompt_debug", response)
+        self.assertEqual(len(response["prompt_debug"]["attempts"]), 1)
+        attempt = response["prompt_debug"]["attempts"][0]
+        self.assertEqual(attempt["stage"], "initial_answer")
+        self.assertEqual(attempt["attempt"], 1)
+        self.assertEqual(attempt["variant"], "primary")
+        self.assertEqual(
+            attempt["request_payload"]["system"],
+            attempt["system_prompt"],
+        )
+        self.assertEqual(
+            attempt["request_payload"]["prompt"],
+            attempt["prompt"],
+        )
+        logged_response = service._log_event.call_args.args[0]
+        self.assertEqual(logged_response["prompt_debug"], response["prompt_debug"])
+
+    def test_log_event_includes_prompt_debug_when_present(self):
+        service = object.__new__(QueryService)
+
+        with patch("services.query_service.LOG_PATH") as mock_log_path:
+            handle = mock_log_path.open.return_value.__enter__.return_value
+            service._log_event(
+                {
+                    "status": "answered",
+                    "refusal_reason": None,
+                    "retrieved_chunks": [],
+                    "citations": [],
+                    "verifier": {"passed": True, "issues": []},
+                    "timings_ms": {"total": 1},
+                    "planning_context": None,
+                    "prompt_debug": {
+                        "attempts": [
+                            {
+                                "stage": "initial_answer",
+                                "attempt": 1,
+                                "variant": "primary",
+                                "system_prompt": "Return JSON",
+                                "prompt": "Hello",
+                                "request_payload": {"prompt": "Hello"},
+                            }
+                        ]
+                    },
+                },
+                question="Hello?",
+                student=None,
+            )
+
+            written = handle.write.call_args.args[0]
+        self.assertIn("\"prompt_debug\"", written)
+
+
+class RetrievalServiceTests(unittest.TestCase):
+    def test_row_matches_program_uses_structured_program_identity_not_chunk_mentions(self):
+        service = object.__new__(RetrievalService)
+
+        self.assertFalse(
+            service._row_matches_program(
+                {
+                    "program": "Integrative Studies BS",
+                    "sectionTitle": "Integrative Studies BS",
+                    "chunk": "This text mentions computer science in passing.",
+                    "structuredData": {
+                        "program": {
+                            "program": "Integrative Studies BS",
+                        }
+                    },
+                },
+                "Computer Science",
+            )
+        )
+        self.assertTrue(
+            service._row_matches_program(
+                {
+                    "program": "Computer Science BS",
+                    "sectionTitle": "Computer Science BS",
+                    "chunk": "Program Profile: Computer Science BS",
+                    "structuredData": {
+                        "program": {
+                            "program": "Computer Science BS",
+                        }
+                    },
+                },
+                "Computer Science",
+            )
+        )
+
+    @patch("services.retrieval_service.text", side_effect=lambda sql: sql)
+    def test_keyword_search_filters_by_program_after_metadata_lookup(self, _mock_text):
+        service = object.__new__(RetrievalService)
+        service.metadata_by_hash = {
+            "bad-hash": {
+                "chunkId": "23-24:000536",
+                "bulletin": "23-24",
+                "chunk": "Mentions computer science somewhere in the body.",
+                "program": "Integrative Studies BS",
+                "sectionTitle": "Integrative Studies BS",
+                "structuredData": {"program": {"program": "Integrative Studies BS"}},
+            },
+            "good-hash": {
+                "chunkId": "23-24:000579",
+                "bulletin": "23-24",
+                "chunk": "Program Profile: Computer Science BS",
+                "program": "Computer Science BS",
+                "sectionTitle": "Computer Science BS",
+                "structuredData": {"program": {"program": "Computer Science BS"}},
+            },
+        }
+
+        connection = Mock()
+        connection.execute.return_value.mappings.return_value.all.return_value = [
+            {"chunk_hash": "bad-hash", "bulletin_year": "2023-2024", "chunk_text": "bad", "keyword_score": 9.0},
+            {"chunk_hash": "good-hash", "bulletin_year": "2023-2024", "chunk_text": "good", "keyword_score": 8.0},
+        ]
+        connect_ctx = Mock()
+        connect_ctx.__enter__ = Mock(return_value=connection)
+        connect_ctx.__exit__ = Mock(return_value=False)
+
+        with patch("services.retrieval_service.engine.connect", return_value=connect_ctx):
+            results = service.keyword_search(
+                "what bulletin year applies to me?",
+                k=1,
+                bulletin_year="2023-2024",
+                program="Computer Science",
+                source_types=("program_summary",),
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["chunkId"], "23-24:000579")
+        self.assertEqual(results[0]["program"], "Computer Science BS")
+
 
 class LLMClientTests(unittest.TestCase):
+    def test_build_generate_payload_matches_ollama_request_shape(self):
+        client = OllamaClient()
+
+        payload = client.build_generate_payload(
+            system_prompt="Return JSON",
+            prompt="Hello",
+            temperature=0.25,
+        )
+
+        self.assertEqual(payload["model"], client.model)
+        self.assertEqual(payload["system"], "Return JSON")
+        self.assertEqual(payload["prompt"], "Hello")
+        self.assertFalse(payload["stream"])
+        self.assertEqual(payload["format"], "json")
+        self.assertEqual(payload["options"]["temperature"], 0.25)
+        self.assertEqual(payload["options"]["num_predict"], client.max_tokens)
+        self.assertEqual(payload["options"]["num_ctx"], client.context_window)
+
     @patch("urllib.request.urlopen", side_effect=socket.timeout("timed out"))
     def test_generate_json_wraps_socket_timeout_as_llm_error(self, _mock_urlopen):
         client = OllamaClient()

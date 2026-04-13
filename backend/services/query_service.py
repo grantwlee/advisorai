@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -61,10 +62,12 @@ class QueryService:
         question: str,
         student_id: str | None = None,
         top_k: int = 1,
+        include_prompt_debug: bool = False,
     ) -> dict:
         started_at = time.perf_counter()
         timings_ms: dict[str, int] = {}
         effective_top_k = 1
+        prompt_debug_attempts: list[dict] = []
 
         student = get_student_payload(student_id) if student_id else None
         bulletin_year = student.get("bulletin_year") if student else None
@@ -90,6 +93,7 @@ class QueryService:
                 verifier={"passed": True, "issues": []},
                 timings_ms=timings_ms,
                 planning_context=planning_context,
+                prompt_debug_attempts=prompt_debug_attempts if include_prompt_debug else None,
             )
             self._log_event(response, question=question, student=student)
             return response
@@ -101,6 +105,8 @@ class QueryService:
                 retrieved_chunks=retrieved_chunks,
                 student=student,
                 planning_context=planning_context,
+                prompt_debug_attempts=prompt_debug_attempts if include_prompt_debug else None,
+                debug_stage="initial_answer",
             )
         except LLMError as exc:
             timings_ms["generation"] = round((time.perf_counter() - generation_started) * 1000)
@@ -112,6 +118,7 @@ class QueryService:
                 verifier={"passed": False, "issues": [str(exc)]},
                 timings_ms=timings_ms,
                 planning_context=planning_context,
+                prompt_debug_attempts=prompt_debug_attempts if include_prompt_debug else None,
             )
             self._log_event(response, question=question, student=student)
             return response
@@ -126,6 +133,7 @@ class QueryService:
                 retrieved_chunks=retrieved_chunks,
                 student=student,
                 planning_context=planning_context,
+                prompt_debug_attempts=prompt_debug_attempts if include_prompt_debug else None,
             )
         except LLMError as exc:
             timings_ms["verification"] = round((time.perf_counter() - verification_started) * 1000)
@@ -138,6 +146,7 @@ class QueryService:
                 verifier={"passed": False, "issues": [str(exc)]},
                 timings_ms=timings_ms,
                 planning_context=planning_context,
+                prompt_debug_attempts=prompt_debug_attempts if include_prompt_debug else None,
             )
             self._log_event(response, question=question, student=student)
             return response
@@ -154,6 +163,7 @@ class QueryService:
                 verifier=verified.get("verifier") or {"passed": False, "issues": []},
                 timings_ms=timings_ms,
                 planning_context=planning_context,
+                prompt_debug_attempts=prompt_debug_attempts if include_prompt_debug else None,
             )
             self._log_event(response, question=question, student=student)
             return response
@@ -172,6 +182,10 @@ class QueryService:
             "audit_summary": None,
             "planning_context": self._serialize_planning_context(planning_context),
         }
+        if include_prompt_debug:
+            response["prompt_debug"] = {
+                "attempts": prompt_debug_attempts,
+            }
         self._log_event(response, question=question, student=student)
         return response
 
@@ -184,12 +198,14 @@ class QueryService:
         planning_context: dict | None,
         rewrite_feedback: list[str] | None = None,
         prior_answer: str | None = None,
+        prompt_debug_attempts: list[dict] | None = None,
+        debug_stage: str = "answer",
     ) -> dict:
         system_prompt = (
             "You are AdvisorAI. Use only the retrieved bulletin summary chunks and student information provided by the user. "
             "Do not use outside knowledge. If the evidence is insufficient, refuse. "
             "Return strict JSON with keys status, answer, refusal_reason. "
-            "Explain why you think your answer is correct and explain how your answer fits into the context of the students plans"
+            "Explain why you think your answer is correct and explain how your answer fits into the context of the student's plan. "
             "When structured planning context is provided, treat it as the source of truth for the "
             "student's completed, in-progress, and planned courses. "
             "Never rely on unseen raw bulletin chunks; the summary chunks are the only bulletin evidence "
@@ -222,12 +238,31 @@ class QueryService:
         )
         last_error: LLMError | None = None
 
-        for attempt, active_prompt in enumerate((prompt, retry_prompt)):
+        for attempt, active_prompt in enumerate((prompt, retry_prompt), start=1):
+            request_payload = self.llm.build_generate_payload(
+                system_prompt=system_prompt,
+                prompt=active_prompt,
+            )
+            if prompt_debug_attempts is not None:
+                prompt_debug_attempts.append(
+                    {
+                        "stage": debug_stage,
+                        "attempt": attempt,
+                        "variant": "primary" if attempt == 1 else "json_retry",
+                        "system_prompt": system_prompt,
+                        "prompt": active_prompt,
+                        "request_payload": deepcopy(request_payload),
+                    }
+                )
             try:
-                result = self.llm.generate_json(system_prompt=system_prompt, prompt=active_prompt)
+                result = self.llm.generate_json(
+                    system_prompt=system_prompt,
+                    prompt=active_prompt,
+                    payload=request_payload,
+                )
             except LLMError as exc:
                 last_error = exc
-                if attempt == 0 and "invalid JSON" in str(exc):
+                if attempt == 1 and "invalid JSON" in str(exc):
                     continue
                 raise
 
@@ -249,7 +284,7 @@ class QueryService:
                     "LLM returned invalid response schema: "
                     + json.dumps(result, ensure_ascii=True)[:1000]
                 )
-                if attempt == 0:
+                if attempt == 1:
                     continue
                 raise last_error
 
@@ -276,6 +311,7 @@ class QueryService:
         retrieved_chunks: list[dict],
         student: dict | None,
         planning_context: dict | None,
+        prompt_debug_attempts: list[dict] | None = None,
     ) -> dict:
         if initial_result["status"] != "answered":
             return {
@@ -324,6 +360,8 @@ class QueryService:
             planning_context=planning_context,
             rewrite_feedback=verifier["issues"],
             prior_answer=normalized_initial_answer,
+            prompt_debug_attempts=prompt_debug_attempts,
+            debug_stage="verification_rewrite",
         )
         if rewrite["status"] != "answered":
             return {
@@ -586,9 +624,10 @@ class QueryService:
         verifier: dict,
         timings_ms: dict,
         planning_context: dict | None,
+        prompt_debug_attempts: list[dict] | None = None,
     ) -> dict:
         timings_ms.setdefault("total", timings_ms.get("retrieval", 0) + timings_ms.get("generation", 0) + timings_ms.get("verification", 0))
-        return {
+        response = {
             "status": "refused",
             "answer": "",
             "refusal_reason": refusal_reason,
@@ -600,6 +639,11 @@ class QueryService:
             "audit_summary": None,
             "planning_context": self._serialize_planning_context(planning_context),
         }
+        if prompt_debug_attempts is not None:
+            response["prompt_debug"] = {
+                "attempts": prompt_debug_attempts,
+            }
+        return response
 
     def _student_context(self, student: dict | None) -> dict | None:
         if not student:
@@ -646,5 +690,7 @@ class QueryService:
             "timings_ms": response.get("timings_ms"),
             "planning_context": response.get("planning_context"),
         }
+        if response.get("prompt_debug") is not None:
+            event["prompt_debug"] = response["prompt_debug"]
         with LOG_PATH.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event) + "\n")
