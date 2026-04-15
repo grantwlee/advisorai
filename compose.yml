@@ -23,10 +23,11 @@ services:
     environment:
       RETRIEVAL_DATA_DIR: /data/bulletins/processed
       LLM_BASE_URL: ${LLM_BASE_URL:-http://llm:11434}
-      LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
+      LLM_PLANNING_MODEL: ${LLM_PLANNING_MODEL:-}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-180}
-      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-512}
-      LLM_CONTEXT_WINDOW: ${LLM_CONTEXT_WINDOW:-4096}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-768}
+      LLM_CONTEXT_WINDOW: ${LLM_CONTEXT_WINDOW:-32768}
       LLM_STARTUP_TIMEOUT_SECONDS: ${LLM_STARTUP_TIMEOUT_SECONDS:-600}
       LLM_STARTUP_POLL_SECONDS: ${LLM_STARTUP_POLL_SECONDS:-5}
       QUERY_LOG_PATH: ${QUERY_LOG_PATH:-/backend/logs/query_logs.jsonl}
@@ -63,7 +64,8 @@ services:
       - .:/workspace
       - ollama_data:/root/.ollama
     environment:
-      LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
+      LLM_PLANNING_MODEL: ${LLM_PLANNING_MODEL:-}
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
     gpus: ${OLLAMA_GPU_REQUEST:-all}

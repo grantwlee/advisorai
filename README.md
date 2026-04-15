@@ -27,7 +27,7 @@ docker compose exec backend python load_bulletin_chunks.py
 3. Pull the configured local model into the LLM service:
 
 ```bash
-docker compose exec llm ollama pull llama3.2:3b
+docker compose exec llm ollama pull qwen2.5:7b
 ```
 
 4. Run the LLM smoke test:

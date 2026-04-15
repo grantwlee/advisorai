@@ -12,10 +12,11 @@ class LLMError(RuntimeError):
 class OllamaClient:
     def __init__(self) -> None:
         self.base_url = os.getenv("LLM_BASE_URL", "http://llm:11434").rstrip("/")
-        self.model = os.getenv("LLM_MODEL", "llama3.2:3b")
+        self.model = os.getenv("LLM_MODEL", "qwen2.5:7b")
+        self.planning_model = os.getenv("LLM_PLANNING_MODEL", "").strip() or None
         self.timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
-        self.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "180"))
-        self.context_window = int(os.getenv("LLM_CONTEXT_WINDOW", "4096"))
+        self.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "768"))
+        self.context_window = int(os.getenv("LLM_CONTEXT_WINDOW", "32768"))
 
     def build_generate_payload(
         self,
