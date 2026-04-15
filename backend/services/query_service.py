@@ -50,16 +50,77 @@ AUDIT_KEYWORDS = (
     "left in my program",
     "left in my major",
 )
+PROGRAM_EXPLORATION_KEYWORDS = (
+    "switch major",
+    "switch majors",
+    "change major",
+    "change majors",
+    "switch program",
+    "switch programs",
+    "change program",
+    "change programs",
+    "different major",
+    "another major",
+    "other major",
+    "other majors",
+    "different program",
+    "another program",
+    "other program",
+    "other programs",
+    "switch from",
+    "change from",
+    "transfer to",
+    "move to",
+    "instead of",
+)
 
 
-def build_citation_payload(answer: str, retrieved_chunks: list[dict]) -> list[dict]:
+def _planning_context_citation_payload(planning_context: dict | None) -> dict | None:
+    if not planning_context:
+        return None
+
+    summary = planning_context_text(planning_context).strip()
+    if not summary:
+        return None
+
+    bulletin = planning_context.get("bulletin_year") or "student profile"
+    return {
+        "chunkId": PLANNING_CONTEXT_CITATION_ID,
+        "bulletin": bulletin,
+        "pageOccurrence": [],
+        "programPageOccurrence": [],
+        "sourcePageOccurrence": [],
+        "sourceChunkIds": planning_context.get("derived_from_chunk_ids") or [],
+        "preview": summary[:300],
+        "chunk": summary,
+        "sourcePdf": None,
+        "sourceType": "planning_context",
+        "program": planning_context.get("program"),
+        "sectionTitle": "Student planning context",
+        "sectionType": "planning_context",
+        "structuredData": None,
+    }
+
+
+def build_citation_payload(
+    answer: str,
+    retrieved_chunks: list[dict],
+    planning_context: dict | None = None,
+) -> list[dict]:
     by_id = {chunk["chunkId"]: chunk for chunk in retrieved_chunks}
     citations = []
     seen = set()
     for chunk_id in extract_citation_ids(answer):
-        if chunk_id in seen or chunk_id not in by_id:
+        if chunk_id in seen:
             continue
-        row = by_id[chunk_id]
+        if chunk_id == PLANNING_CONTEXT_CITATION_ID:
+            row = _planning_context_citation_payload(planning_context)
+            if row is None:
+                continue
+        elif chunk_id in by_id:
+            row = by_id[chunk_id]
+        else:
+            continue
         citations.append(serialize_chunk_reference(row))
         seen.add(chunk_id)
     return citations
@@ -84,12 +145,17 @@ class QueryService:
     ) -> dict:
         started_at = time.perf_counter()
         timings_ms: dict[str, int] = {}
-        effective_top_k = 1
+        effective_top_k = max(2, top_k)
         prompt_debug_attempts: list[dict] = []
 
         student = get_student_payload(student_id) if student_id else None
+        normalized_question = question.lower().strip()
         bulletin_year = student.get("bulletin_year") if student else None
-        program = student.get("program") if student else None
+        program = (
+            student.get("program")
+            if student and self._should_scope_retrieval_to_student_program(normalized_question)
+            else None
+        )
         planning_context = build_planning_context(student) if student else None
 
         retrieval_started = time.perf_counter()
@@ -195,7 +261,11 @@ class QueryService:
             return response
 
         answer = verified["answer"].strip()
-        citations = build_citation_payload(answer, retrieved_chunks)
+        citations = build_citation_payload(
+            answer,
+            retrieved_chunks,
+            planning_context=planning_context,
+        )
         response = {
             "status": "answered",
             "answer": answer,
@@ -257,6 +327,10 @@ class QueryService:
             "formatted like [23-24:007646], [23-24:007646, 23-24:007652], or [planning_context]. "
             "Use [planning_context] only for facts taken from the student's saved course history or "
             "planning data. Use bulletin chunk citations only for bulletin requirements or policy claims. "
+            "If the question involves switching, comparing, or choosing between majors or programs, "
+            "cite the relevant bulletin chunk for each program-specific requirement claim when that "
+            "chunk is available in the prompt. Prefer bulletin chunk citations over [planning_context] "
+            "for degree requirement comparisons across programs. "
             "Keep planning-context facts and bulletin-requirement facts in separate sentences whenever possible. "
             "Treat the 'Bulletin requirement evidence' section as catalog-derived requirements and rules, "
             "not as the student's personal course history or progress. "
@@ -575,6 +649,15 @@ class QueryService:
         ):
             return True
         return False
+
+    def _should_scope_retrieval_to_student_program(self, normalized_question: str) -> bool:
+        if any(keyword in normalized_question for keyword in PROGRAM_EXPLORATION_KEYWORDS):
+            return False
+        if "switch" in normalized_question and ("major" in normalized_question or "program" in normalized_question):
+            return False
+        if "change" in normalized_question and ("major" in normalized_question or "program" in normalized_question):
+            return False
+        return True
 
     def _join_items(self, items: list[str]) -> str:
         values = [str(item).strip() for item in items if str(item).strip()]

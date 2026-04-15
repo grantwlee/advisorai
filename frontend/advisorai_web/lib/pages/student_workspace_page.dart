@@ -604,10 +604,24 @@ class _AdvisorExchangeCard extends StatelessWidget {
                 _PlanningContextCard(planningContext: planningContext),
               if (auditSummary != null)
                 _AuditSummaryCard(auditSummary: auditSummary),
-              const _SectionTitle(title: 'Citations'),
+              _SectionTitle(title: 'Citations (${citations.length})'),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'These are the sources explicitly cited in the answer text.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
               ...citations.map((citation) => _CitationCard(citation: citation)),
               const SizedBox(height: 8),
-              const _SectionTitle(title: 'Retrieved Chunks'),
+              _SectionTitle(title: 'Retrieved Chunks (${retrieved.length})'),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'These are the chunks retrieved to support the answer, even if not all of them were cited explicitly.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
               ...retrieved.map((chunk) => _RetrievedChunkTile(chunk: chunk)),
               if (verifier['passed'] == false &&
                   (verifier['issues'] as List<dynamic>? ?? []).isNotEmpty) ...[
@@ -789,6 +803,12 @@ class _CitationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isPlanningContext = citation['chunkId'] == 'planning_context' ||
+        citation['sourceType']?.toString() == 'planning_context';
+    final heading = isPlanningContext
+        ? 'planning_context • Student record'
+        : '${citation['chunkId']} • Bulletin ${citation['bulletin']}';
+
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       color:
@@ -799,7 +819,7 @@ class _CitationCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '${citation['chunkId']} • Bulletin ${citation['bulletin']}',
+              heading,
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             _PdfLinkSection(data: citation),

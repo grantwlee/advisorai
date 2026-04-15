@@ -509,7 +509,7 @@ class QueryServiceTests(unittest.TestCase):
 
         service.retrieval.hybrid_search.assert_called_once_with(
             "What do I have left?",
-            k=1,
+            k=4,
             bulletin_year="2023-2024",
             program="Computer Science",
             source_types=DEFAULT_QUERY_SOURCE_TYPES,
@@ -528,6 +528,64 @@ class QueryServiceTests(unittest.TestCase):
         self.assertEqual(
             response["retrieved_chunks"][0]["pdfPageLinks"][1]["url"],
             "/api/bulletins/pdf/Bulletin_23-24.pdf#page=480",
+        )
+
+    @patch("services.query_service.get_student_payload")
+    def test_answer_question_does_not_scope_program_for_switch_major_questions(self, mock_get_student_payload):
+        service = object.__new__(QueryService)
+        service.retrieval = Mock()
+        service.llm = Mock()
+        service._generate_answer = Mock(
+            return_value={
+                "status": "answered",
+                "answer": "You can compare both programs using the retrieved evidence [23-24:009001].",
+                "refusal_reason": None,
+            }
+        )
+        service._verify_or_rewrite = Mock(
+            return_value={
+                "status": "answered",
+                "answer": "You can compare both programs using the retrieved evidence [23-24:009001].",
+                "verifier": {"passed": True, "issues": []},
+            }
+        )
+        service._log_event = Mock()
+
+        mock_get_student_payload.return_value = {
+            "student_id": "S1001",
+            "name": "Alex Johnson",
+            "program": "Computer Science",
+            "bulletin_year": "2023-2024",
+            "courses": [],
+        }
+        service.retrieval.hybrid_search.return_value = [
+            {
+                "chunkId": "23-24:009001",
+                "bulletin": "23-24",
+                "pageOccurrence": [479],
+                "sourcePageOccurrence": [479],
+                "sourceChunkIds": ["23-24:007640"],
+                "preview": "Program Summary",
+                "chunk": "Program Summary",
+                "sourcePdf": "Bulletin_23-24.pdf",
+                "sourceType": "program_summary",
+                "program": "Information Systems BBA",
+                "sectionTitle": "Information Systems BBA",
+                "score": 5.0,
+            }
+        ]
+
+        service.answer_question(
+            question="Can I switch from Computer Science to Information Systems?",
+            student_id="S1001",
+        )
+
+        service.retrieval.hybrid_search.assert_called_once_with(
+            "Can I switch from Computer Science to Information Systems?",
+            k=2,
+            bulletin_year="2023-2024",
+            program=None,
+            source_types=DEFAULT_QUERY_SOURCE_TYPES,
         )
 
     def test_repair_answer_citations_adds_supporting_chunk_id(self):
