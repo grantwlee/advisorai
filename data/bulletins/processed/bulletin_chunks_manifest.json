@@ -2,32 +2,29 @@
   "sourceDir": "data/bulletins/raw",
   "outDir": "data/bulletins/processed",
   "model": "sentence-transformers/all-MiniLM-L6-v2",
-  "headerCutPct": 0.08,
-  "footerCutPct": 0.08,
-  "minChars": 1200,
-  "maxChars": 1500,
-  "overlapChars": 80,
+  "chunkFormat": "program_profile",
   "bulletins": [
     {
       "bulletin": "22-23",
       "sourcePdf": "Bulletin+22-23+PDF-final.pdf",
       "pages": 665,
-      "chunks": 2829
+      "programSummaryChunks": 203
     },
     {
       "bulletin": "24-25",
       "sourcePdf": "Bulletin+24-25+PDF.pdf",
       "pages": 668,
-      "chunks": 2814
+      "programSummaryChunks": 209
     },
     {
       "bulletin": "23-24",
       "sourcePdf": "Bulletin_23-24_PDF_FINAL.pdf",
       "pages": 678,
-      "chunks": 2896
+      "programSummaryChunks": 186
     }
   ],
-  "totalChunks": 8539,
+  "totalChunks": 598,
+  "totalIndexedChunks": 598,
   "faissDim": 384,
   "faissIndexType": "IndexFlatIP (normalized embeddings)"
 }

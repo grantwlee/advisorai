@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/api_service.dart';
 
@@ -233,7 +234,8 @@ class _StudentWorkspacePageState extends State<StudentWorkspacePage> {
                           else
                             ..._history.map((exchange) => Padding(
                                   padding: const EdgeInsets.only(bottom: 16),
-                                  child: _AdvisorExchangeCard(exchange: exchange),
+                                  child:
+                                      _AdvisorExchangeCard(exchange: exchange),
                                 )),
                         ],
                       ),
@@ -287,9 +289,10 @@ class _StudentSummaryCard extends StatelessWidget {
                     width: double.infinity,
                     child: Text(
                       name,
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                      style:
+                          Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
                     ),
                   ),
                   _InfoChip(
@@ -511,12 +514,13 @@ class _AdvisorQueryCard extends StatelessWidget {
                       ),
                       _SuggestionChip(
                         label: 'Which bulletin year applies to me?',
-                        onTap: () =>
-                            controller.text = 'Which bulletin year applies to me?',
+                        onTap: () => controller.text =
+                            'Which bulletin year applies to me?',
                       ),
                       _SuggestionChip(
                         label: 'What does INFS 428 cover?',
-                        onTap: () => controller.text = 'What does INFS 428 cover?',
+                        onTap: () =>
+                            controller.text = 'What does INFS 428 cover?',
                       ),
                       _SuggestionChip(
                         label: 'What should I take next semester?',
@@ -568,14 +572,13 @@ class _AdvisorExchangeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final response = exchange.response;
     final status = response?['status']?.toString();
-    final citations =
-        (response?['citations'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+    final citations = (response?['citations'] as List<dynamic>? ?? [])
+        .cast<Map<String, dynamic>>();
     final retrieved = (response?['retrieved_chunks'] as List<dynamic>? ?? [])
         .cast<Map<String, dynamic>>();
-    final verifier =
-        (response?['verifier'] as Map<String, dynamic>? ?? const <String, dynamic>{});
-    final auditSummary =
-        response?['audit_summary'] as Map<String, dynamic>?;
+    final verifier = (response?['verifier'] as Map<String, dynamic>? ??
+        const <String, dynamic>{});
+    final auditSummary = response?['audit_summary'] as Map<String, dynamic>?;
     final planningContext =
         response?['planning_context'] as Map<String, dynamic>?;
 
@@ -601,10 +604,24 @@ class _AdvisorExchangeCard extends StatelessWidget {
                 _PlanningContextCard(planningContext: planningContext),
               if (auditSummary != null)
                 _AuditSummaryCard(auditSummary: auditSummary),
-              const _SectionTitle(title: 'Citations'),
+              _SectionTitle(title: 'Citations (${citations.length})'),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'These are the sources explicitly cited in the answer text.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
               ...citations.map((citation) => _CitationCard(citation: citation)),
               const SizedBox(height: 8),
-              const _SectionTitle(title: 'Retrieved Chunks'),
+              _SectionTitle(title: 'Retrieved Chunks (${retrieved.length})'),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'These are the chunks retrieved to support the answer, even if not all of them were cited explicitly.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
               ...retrieved.map((chunk) => _RetrievedChunkTile(chunk: chunk)),
               if (verifier['passed'] == false &&
                   (verifier['issues'] as List<dynamic>? ?? []).isNotEmpty) ...[
@@ -619,7 +636,8 @@ class _AdvisorExchangeCard extends StatelessWidget {
               ],
             ] else ...[
               Text(
-                response['refusal_reason']?.toString() ?? 'The assistant refused to answer.',
+                response['refusal_reason']?.toString() ??
+                    'The assistant refused to answer.',
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
               const SizedBox(height: 12),
@@ -647,8 +665,8 @@ class _AuditSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final remaining =
-        (auditSummary['remaining'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+    final remaining = (auditSummary['remaining'] as List<dynamic>? ?? [])
+        .cast<Map<String, dynamic>>();
     final inProgress = (auditSummary['in_progress'] as List<dynamic>? ?? [])
         .cast<Map<String, dynamic>>();
 
@@ -688,15 +706,13 @@ class _PlanningContextCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final recommended = (planningContext['recommended_next_courses']
-                as List<dynamic>? ??
-            [])
-        .cast<Map<String, dynamic>>();
-    final blocked =
-        (planningContext['blocked_courses'] as List<dynamic>? ?? [])
+    final recommended =
+        (planningContext['recommended_next_courses'] as List<dynamic>? ?? [])
             .cast<Map<String, dynamic>>();
-    final gaps =
-        (planningContext['context_gaps'] as List<dynamic>? ?? []).cast<dynamic>();
+    final blocked = (planningContext['blocked_courses'] as List<dynamic>? ?? [])
+        .cast<Map<String, dynamic>>();
+    final gaps = (planningContext['context_gaps'] as List<dynamic>? ?? [])
+        .cast<dynamic>();
 
     return Container(
       width: double.infinity,
@@ -787,7 +803,12 @@ class _CitationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final pages = (citation['pageOccurrence'] as List<dynamic>? ?? []).join(', ');
+    final isPlanningContext = citation['chunkId'] == 'planning_context' ||
+        citation['sourceType']?.toString() == 'planning_context';
+    final heading = isPlanningContext
+        ? 'planning_context • Student record'
+        : '${citation['chunkId']} • Bulletin ${citation['bulletin']}';
+
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       color:
@@ -798,12 +819,16 @@ class _CitationCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '${citation['chunkId']} • Bulletin ${citation['bulletin']}',
+              heading,
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
-            if (pages.isNotEmpty) Text('Pages: $pages'),
+            _PdfLinkSection(data: citation),
             const SizedBox(height: 6),
-            Text(citation['preview']?.toString() ?? ''),
+            SelectableText(
+              citation['chunk']?.toString() ??
+                  citation['preview']?.toString() ??
+                  '',
+            ),
           ],
         ),
       ),
@@ -818,20 +843,104 @@ class _RetrievedChunkTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final pages = (chunk['pageOccurrence'] as List<dynamic>? ?? []).join(', ');
     return ExpansionTile(
       tilePadding: EdgeInsets.zero,
       title: Text('${chunk['chunkId']} • score ${chunk['score'] ?? ''}'),
       subtitle: Text('Bulletin ${chunk['bulletin']}'),
       childrenPadding: const EdgeInsets.only(bottom: 12),
       children: [
-        if (pages.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text('Pages: $pages'),
-          ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: _PdfLinkSection(data: chunk),
+        ),
         SelectableText(chunk['preview']?.toString() ?? ''),
       ],
+    );
+  }
+}
+
+class _PdfLinkSection extends StatelessWidget {
+  final Map<String, dynamic> data;
+
+  const _PdfLinkSection({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final sourcePdf = data['sourcePdf']?.toString();
+    final pdfUrl = data['pdfUrl']?.toString();
+    final pageLinks = (data['pdfPageLinks'] as List<dynamic>? ?? [])
+        .cast<Map<String, dynamic>>();
+    final pages = (data['sourcePageOccurrence'] as List<dynamic>? ??
+            data['pageOccurrence'] as List<dynamic>? ??
+            [])
+        .join(', ');
+
+    if ((sourcePdf == null || sourcePdf.isEmpty) &&
+        (pdfUrl == null || pdfUrl.isEmpty) &&
+        pageLinks.isEmpty &&
+        pages.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (sourcePdf != null && sourcePdf.isNotEmpty)
+          Text(
+            sourcePdf,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        if ((pdfUrl != null && pdfUrl.isNotEmpty) || pageLinks.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (pdfUrl != null && pdfUrl.isNotEmpty)
+                OutlinedButton.icon(
+                  onPressed: () => _openExternalUrl(context, pdfUrl),
+                  icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                  label: const Text('Open PDF'),
+                ),
+              ...pageLinks.map(
+                (link) => ActionChip(
+                  label: Text('Page ${link['page']}'),
+                  onPressed: () =>
+                      _openExternalUrl(context, link['url']?.toString() ?? ''),
+                ),
+              ),
+            ],
+          ),
+        ] else if (pages.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text('Pages: $pages'),
+          ),
+      ],
+    );
+  }
+}
+
+Uri _resolveExternalUri(String rawUrl) {
+  final parsed = Uri.tryParse(rawUrl);
+  if (parsed == null) {
+    return Uri();
+  }
+  if (parsed.hasScheme) {
+    return parsed;
+  }
+  return Uri.base.resolveUri(parsed);
+}
+
+Future<void> _openExternalUrl(BuildContext context, String rawUrl) async {
+  if (rawUrl.isEmpty) {
+    return;
+  }
+  final uri = _resolveExternalUri(rawUrl);
+  final opened = await launchUrl(uri, webOnlyWindowName: '_blank');
+  if (!opened && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Unable to open $rawUrl')),
     );
   }
 }
@@ -955,10 +1064,13 @@ class _AddCourseDialogState extends State<_AddCourseDialog> {
                   initialValue: _status,
                   decoration: const InputDecoration(labelText: 'Status'),
                   items: const [
-                    DropdownMenuItem(value: 'completed', child: Text('Completed')),
-                    DropdownMenuItem(value: 'in_progress', child: Text('In progress')),
+                    DropdownMenuItem(
+                        value: 'completed', child: Text('Completed')),
+                    DropdownMenuItem(
+                        value: 'in_progress', child: Text('In progress')),
                     DropdownMenuItem(value: 'planned', child: Text('Planned')),
-                    DropdownMenuItem(value: 'transfer', child: Text('Transfer')),
+                    DropdownMenuItem(
+                        value: 'transfer', child: Text('Transfer')),
                     DropdownMenuItem(value: 'waived', child: Text('Waived')),
                   ],
                   onChanged: (value) {

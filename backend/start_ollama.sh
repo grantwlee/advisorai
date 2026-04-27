@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-MODEL="${LLM_MODEL:-llama3.2:3b}"
+MODEL="${LLM_MODEL:-qwen2.5:7b}"
+PLANNING_MODEL="${LLM_PLANNING_MODEL:-}"
 
 ollama serve &
 SERVER_PID=$!
@@ -17,11 +18,19 @@ until ollama list >/dev/null 2>&1; do
   sleep 2
 done
 
-until ollama pull "$MODEL"; do
-  echo "Waiting for Ollama model pull to succeed for $MODEL..."
-  sleep 5
-done
+pull_model() {
+  TARGET_MODEL="$1"
+  until ollama pull "$TARGET_MODEL"; do
+    echo "Waiting for Ollama model pull to succeed for $TARGET_MODEL..."
+    sleep 5
+  done
+  echo "Ollama model $TARGET_MODEL is ready."
+}
 
-echo "Ollama model $MODEL is ready."
+pull_model "$MODEL"
+
+if [ -n "$PLANNING_MODEL" ] && [ "$PLANNING_MODEL" != "$MODEL" ]; then
+  pull_model "$PLANNING_MODEL"
+fi
 
 wait "$SERVER_PID"

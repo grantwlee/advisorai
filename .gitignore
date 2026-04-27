@@ -1,4 +1,6 @@
 venv/
+.venv_ingest
+.venv_ingest_current
 __pycache__/
 *.pyc
 

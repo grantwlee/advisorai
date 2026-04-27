@@ -2,13 +2,14 @@ import os
 import traceback
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 
 from database import engine, session
 from models import AdvisingSession, Course, Student, StudentCourse
+from services.chunk_serialization import serialize_chunk_reference
 from services.llm_client import LLMError, OllamaClient
 from services.profile_service import (
     add_or_update_student_course,
@@ -20,7 +21,10 @@ from services.profile_service import (
     serialize_student_course,
 )
 from services.query_service import QueryService
-from services.retrieval_service import get_retrieval_service
+from services.retrieval_service import (
+    DEFAULT_QUERY_SOURCE_TYPES,
+    get_retrieval_service,
+)
 from services.runtime_setup import ensure_runtime_schema
 
 load_dotenv()
@@ -42,17 +46,43 @@ if DB_DIALECT != "postgresql":
 retrieval_service = get_retrieval_service()
 query_service = QueryService()
 llm_client = OllamaClient()
+BULLETIN_PDF_DIR = os.path.abspath(
+    os.getenv(
+        "BULLETIN_PDF_DIR",
+        os.path.join(app.root_path, "..", "data", "bulletins", "raw"),
+    )
+)
 
 
 def serialize_retrieval_result(row: dict) -> dict:
-    return {
-        "chunkId": row["chunkId"],
-        "bulletin": row["bulletin"],
-        "pageOccurrence": row.get("pageOccurrence") or [],
-        "preview": row["preview"],
-        "score": row.get("score", row.get("semanticScore", row.get("keywordScore", 0.0))),
-        "sourcePdf": row.get("sourcePdf"),
-    }
+    serialized = serialize_chunk_reference(row, include_score=True)
+    serialized["score"] = row.get(
+        "score",
+        row.get("semanticScore", row.get("keywordScore", 0.0)),
+    )
+    return serialized
+
+
+def resolve_retrieval_source_types(args) -> tuple[str, ...] | None:
+    return DEFAULT_QUERY_SOURCE_TYPES
+
+
+def parse_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+@app.get("/api/bulletins/pdf/<path:filename>")
+def bulletin_pdf(filename):
+    return send_from_directory(
+        BULLETIN_PDF_DIR,
+        filename,
+        mimetype="application/pdf",
+        as_attachment=False,
+    )
 
 
 @app.route("/api/health")
@@ -73,6 +103,7 @@ def health():
             "retrieval": {
                 "processed_dir": retrieval_service.processed_dir,
                 "chunks_loaded": len(retrieval_service.metadata),
+                "indexed_chunks_loaded": len(retrieval_service.index_metadata),
             },
             "llm": llm_status,
         }
@@ -275,13 +306,21 @@ def retrieve_semantic():
     k = int(request.args.get("k", 5))
     bulletin_year = request.args.get("bulletin_year")
     program = request.args.get("program")
+    source_types = resolve_retrieval_source_types(request.args)
     results = retrieval_service.semantic_search(
         query,
         k=k,
         bulletin_year=bulletin_year,
         program=program,
+        source_types=source_types,
     )
-    return jsonify({"query": query, "results": [serialize_retrieval_result(row) for row in results]})
+    return jsonify(
+        {
+            "query": query,
+            "source_types": list(source_types) if source_types is not None else None,
+            "results": [serialize_retrieval_result(row) for row in results],
+        }
+    )
 
 
 @app.get("/api/retrieve/keyword")
@@ -293,12 +332,14 @@ def retrieve_keyword():
     k = int(request.args.get("k", 5))
     bulletin_year = request.args.get("bulletin_year")
     program = request.args.get("program")
+    source_types = resolve_retrieval_source_types(request.args)
     try:
         results = retrieval_service.keyword_search(
             query,
             k=k,
             bulletin_year=bulletin_year,
             program=program,
+            source_types=source_types,
         )
     except SQLAlchemyError as exc:
         return jsonify(
@@ -308,7 +349,13 @@ def retrieve_keyword():
             }
         ), 500
 
-    return jsonify({"query": query, "results": [serialize_retrieval_result(row) for row in results]})
+    return jsonify(
+        {
+            "query": query,
+            "source_types": list(source_types) if source_types is not None else None,
+            "results": [serialize_retrieval_result(row) for row in results],
+        }
+    )
 
 
 @app.get("/api/retrieve")
@@ -320,12 +367,14 @@ def retrieve_hybrid():
     k = int(request.args.get("k", 5))
     bulletin_year = request.args.get("bulletin_year")
     program = request.args.get("program")
+    source_types = resolve_retrieval_source_types(request.args)
     try:
         results = retrieval_service.hybrid_search(
             query,
             k=k,
             bulletin_year=bulletin_year,
             program=program,
+            source_types=source_types,
         )
     except SQLAlchemyError as exc:
         return jsonify(
@@ -335,7 +384,33 @@ def retrieve_hybrid():
             }
         ), 500
 
-    return jsonify({"query": query, "results": [serialize_retrieval_result(row) for row in results]})
+    return jsonify(
+        {
+            "query": query,
+            "source_types": list(source_types) if source_types is not None else None,
+            "results": [serialize_retrieval_result(row) for row in results],
+        }
+    )
+
+
+@app.get("/api/retrieve/chunks")
+def retrieve_chunks_by_id():
+    chunk_ids = [value.strip() for value in request.args.getlist("chunk_id") if value.strip()]
+    if not chunk_ids:
+        csv_ids = (request.args.get("chunk_ids") or "").strip()
+        if csv_ids:
+            chunk_ids = [value.strip() for value in csv_ids.split(",") if value.strip()]
+
+    if not chunk_ids:
+        return jsonify({"error": "chunk_id or chunk_ids is required"}), 400
+
+    results = retrieval_service.get_chunks(chunk_ids)
+    return jsonify(
+        {
+            "chunk_ids": chunk_ids,
+            "results": [serialize_retrieval_result(row) for row in results],
+        }
+    )
 
 
 @app.post("/api/query")
@@ -345,8 +420,9 @@ def query():
     if not question:
         return jsonify({"error": "question is required"}), 400
 
-    top_k = int(data.get("top_k") or 5)
+    top_k = int(data.get("top_k") or 1)
     student_id = data.get("student_id")
+    include_prompt_debug = parse_bool(data.get("include_prompt_debug"))
     if student_id and not get_student(student_id):
         return jsonify({"error": "Student not found"}), 404
 
@@ -355,6 +431,7 @@ def query():
             question=question,
             student_id=student_id,
             top_k=top_k,
+            include_prompt_debug=include_prompt_debug,
         )
         return jsonify(response)
     except SQLAlchemyError as exc:

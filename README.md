@@ -132,7 +132,7 @@ docker compose exec backend python load_bulletin_chunks.py
 3. Pull the configured Ollama model if it is not already present:
 
 ```bash
-docker compose exec llm ollama pull llama3.2:3b
+docker compose exec llm ollama pull qwen2.5:7b
 ```
 
 4. Verify LLM connectivity:

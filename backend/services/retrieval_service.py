@@ -2,6 +2,7 @@ import json
 import os
 import re
 from functools import lru_cache
+from typing import Iterable
 
 import faiss
 import numpy as np
@@ -38,6 +39,7 @@ STOPWORDS = {
     "to",
     "with",
 }
+DEFAULT_QUERY_SOURCE_TYPES = ("program_summary",)
 
 def tokenize_program(program: str | None) -> list[str]:
     if not program:
@@ -61,6 +63,8 @@ class RetrievalService:
         with open(self.jsonl_path, "r", encoding="utf-8") as handle:
             self.metadata = [json.loads(line) for line in handle]
 
+        self.index_metadata = list(self.metadata)
+
         self.metadata_by_hash = {
             row.get("hash"): row for row in self.metadata if row.get("hash")
         }
@@ -77,6 +81,50 @@ class RetrievalService:
         token_hits = sum(1 for token in tokens if token in haystack)
         return token_hits >= min(2, len(tokens))
 
+    def _row_program_text(self, row: dict) -> str:
+        structured = row.get("structuredData")
+        structured_program = None
+        if isinstance(structured, dict):
+            program_payload = structured.get("program")
+            if isinstance(program_payload, dict):
+                structured_program = program_payload.get("program")
+
+        return "\n".join(
+            part
+            for part in (
+                row.get("program"),
+                row.get("sectionTitle"),
+                structured_program,
+            )
+            if isinstance(part, str) and part.strip()
+        )
+
+    def _row_matches_program(self, row: dict, program: str | None) -> bool:
+        return self._program_matches(self._row_program_text(row), program)
+
+    def _normalize_source_types(
+        self,
+        source_types: Iterable[str] | None,
+    ) -> set[str] | None:
+        if source_types is None:
+            return None
+
+        normalized = {
+            value.strip().lower()
+            for value in source_types
+            if isinstance(value, str) and value.strip()
+        }
+        return normalized or None
+
+    def _source_type_matches(
+        self,
+        row: dict,
+        allowed_source_types: set[str] | None,
+    ) -> bool:
+        if allowed_source_types is None:
+            return True
+        return (row.get("sourceType") or "program_summary").lower() in allowed_source_types
+
     def _metadata_to_result(
         self,
         row: dict,
@@ -89,9 +137,17 @@ class RetrievalService:
             "chunkId": row["chunkId"],
             "bulletin": row["bulletin"],
             "pageOccurrence": row.get("pageOccurrence") or [],
+            "programPageOccurrence": row.get("programPageOccurrence") or [],
+            "sourcePageOccurrence": row.get("sourcePageOccurrence") or [],
+            "sourceChunkIds": row.get("sourceChunkIds") or [],
             "preview": row["chunk"][:300],
             "chunk": row["chunk"],
             "sourcePdf": row.get("sourcePdf"),
+            "sourceType": row.get("sourceType"),
+            "program": row.get("program"),
+            "sectionTitle": row.get("sectionTitle"),
+            "sectionType": row.get("sectionType"),
+            "structuredData": row.get("structuredData"),
             "hash": row.get("hash"),
             "semanticScore": float(semantic_score),
             "keywordScore": float(keyword_score),
@@ -105,14 +161,22 @@ class RetrievalService:
         k: int = 10,
         bulletin_year: str | None = None,
         program: str | None = None,
+        source_types: Iterable[str] | None = None,
     ) -> list[dict]:
         target_year = normalize_bulletin_year(bulletin_year)
+        allowed_source_types = self._normalize_source_types(source_types)
+
         effective_query = query.strip()
         if program:
             effective_query = f"{program} {effective_query}".strip()
 
         q_vec = self.model.encode([effective_query], normalize_embeddings=True)
-        search_k = min(max(k * 8, k), len(self.metadata))
+        if allowed_source_types is None:
+            search_k = min(max(k * 8, k), len(self.index_metadata))
+        else:
+            search_k = len(self.index_metadata)
+        if search_k <= 0:
+            return []
         scores, indices = self.index.search(np.array(q_vec, dtype=np.float32), search_k)
 
         results: list[dict] = []
@@ -120,10 +184,14 @@ class RetrievalService:
             if idx == -1:
                 continue
 
-            row = self.metadata[idx]
+            if idx >= len(self.index_metadata):
+                continue
+            row = self.index_metadata[idx]
             if target_year and normalize_bulletin_year(row.get("bulletin")) != target_year:
                 continue
-            if not self._program_matches(row.get("chunk", ""), program):
+            if not self._source_type_matches(row, allowed_source_types):
+                continue
+            if not self._row_matches_program(row, program):
                 continue
 
             results.append(self._metadata_to_result(row, semantic_score=float(score)))
@@ -139,19 +207,22 @@ class RetrievalService:
         k: int = 10,
         bulletin_year: str | None = None,
         program: str | None = None,
+        source_types: Iterable[str] | None = None,
     ) -> list[dict]:
         clauses = [
             "to_tsvector('english', chunk_text) @@ plainto_tsquery('english', :q)"
         ]
-        params: dict[str, object] = {"q": query, "k": int(k)}
+        candidate_limit = max(int(k), 10) * (25 if program else 1)
+        params: dict[str, object] = {"q": query, "k": candidate_limit}
         target_year = normalize_bulletin_year(bulletin_year)
+        allowed_source_types = self._normalize_source_types(source_types)
         if target_year:
             clauses.append("bulletin_year = :bulletin_year")
             params["bulletin_year"] = target_year
 
-        if program:
-            clauses.append("LOWER(chunk_text) LIKE :program_pattern")
-            params["program_pattern"] = f"%{program.lower()}%"
+        if allowed_source_types:
+            clauses.append("LOWER(COALESCE(source_type, 'program_summary')) = ANY(:source_types)")
+            params["source_types"] = list(allowed_source_types)
 
         sql = text(
             f"""
@@ -178,6 +249,8 @@ class RetrievalService:
             hash_key = row.get("chunk_hash")
             meta = self.metadata_by_hash.get(hash_key)
             if meta:
+                if not self._row_matches_program(meta, program):
+                    continue
                 results.append(
                     self._metadata_to_result(
                         meta,
@@ -185,25 +258,38 @@ class RetrievalService:
                         keyword_matched=True,
                     )
                 )
+                if len(results) >= k:
+                    break
                 continue
 
             bulletin = row.get("bulletin_year", "unknown")
             chunk_id = f"{bulletin}:{hash_key[:8] if hash_key else 'unknown'}"
             chunk_text = row.get("chunk_text") or ""
+            if program and not self._program_matches(chunk_text, program):
+                continue
             results.append(
                 {
                     "chunkId": chunk_id,
                     "bulletin": bulletin,
                     "pageOccurrence": [],
+                    "sourcePageOccurrence": [],
+                    "sourceChunkIds": [],
                     "preview": chunk_text[:300],
                     "chunk": chunk_text,
                     "sourcePdf": None,
+                    "sourceType": "program_summary",
+                    "program": None,
+                    "sectionTitle": None,
+                    "sectionType": None,
+                    "structuredData": None,
                     "hash": hash_key,
                     "semanticScore": 0.0,
                     "keywordScore": float(row.get("keyword_score") or 0.0),
                     "keywordMatched": True,
                 }
             )
+            if len(results) >= k:
+                break
 
         return results
 
@@ -214,12 +300,14 @@ class RetrievalService:
         k: int = 5,
         bulletin_year: str | None = None,
         program: str | None = None,
+        source_types: Iterable[str] | None = None,
     ) -> list[dict]:
         semantic_top = self.semantic_search(
             query,
             k=max(k, 10),
             bulletin_year=bulletin_year,
             program=program,
+            source_types=source_types,
         )
         try:
             keyword_top = self.keyword_search(
@@ -227,6 +315,7 @@ class RetrievalService:
                 k=max(k, 10),
                 bulletin_year=bulletin_year,
                 program=program,
+                source_types=source_types,
             )
         except SQLAlchemyError:
             keyword_top = []
