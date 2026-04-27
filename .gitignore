@@ -10,4 +10,6 @@ __pycache__/
 
 /apache/web
 
-
+.github
+.venv_ingest
+.venv_ingest_current
